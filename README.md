@@ -34,7 +34,7 @@ used in other areas as well.
 This fork also carries an experimental `TurboQuant` path for TensorFlow Python
 layers under [`tensorflow/python/ops/turboquant`](tensorflow/python/ops/turboquant/README.md).
 The initial scope is a weight-only, block-wise codebook quantizer for Keras
-`Dense` layers with:
+`Dense` and `Conv2D` layers with:
 
 - per-output-channel codebooks,
 - per-block scales,

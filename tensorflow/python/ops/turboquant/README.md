@@ -7,10 +7,11 @@ layers built around three conservative ideas:
 - block-wise scales to preserve local dynamic range,
 - optional outlier residuals kept in full precision for stability.
 
-The current integration targets `tf.keras.layers.Dense` through
-`TurboDense` and a `quantize_model()` cloning helper. The core packing logic is
-kept in a NumPy-only module so the quantizer is easy to test and extend before
-moving deeper into TensorFlow compiler paths.
+The current integration targets `tf.keras.layers.Dense` and
+`tf.keras.layers.Conv2D` through `TurboDense`, `TurboConv2D`, and a
+`quantize_model()` cloning helper. The core packing logic is kept in a
+NumPy-only module so the quantizer is easy to test and extend before moving
+deeper into TensorFlow compiler paths.
 
 ## Example
 
@@ -35,8 +36,9 @@ quantized_model = api.quantize_model(
   Python-layer behavior and error profile are covered by tests.
 - Compression numbers reported by `summarize_encoding()` and `summarize_model()`
   estimate the effective packed footprint. They are not raw checkpoint sizes.
-- The tensor packing API is shape-generic, so adding `Conv2D` or embedding
-  wrappers later does not require reworking the quantizer itself.
+- The tensor packing API is shape-generic, so extending support beyond the
+  current `Dense` and `Conv2D` wrappers does not require reworking the
+  quantizer itself.
 
 ## Benchmark
 

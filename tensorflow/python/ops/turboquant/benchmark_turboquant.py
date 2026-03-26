@@ -1,11 +1,13 @@
-"""Minimal benchmark for TurboQuant Dense models."""
+"""Minimal benchmark for TurboQuant Conv2D and Dense models."""
 
 import time
 
 import numpy as np
 
 from tensorflow.python.keras import Sequential
+from tensorflow.python.keras.layers import Conv2D
 from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
 from tensorflow.python.ops.turboquant.api import quantize_model
 from tensorflow.python.ops.turboquant.api import summarize_model
@@ -24,12 +26,14 @@ def _measure_latency(model, inputs, warmup=10, steps=50):
 
 def main():
   rng = np.random.default_rng(123)
-  inputs = rng.normal(size=(64, 256)).astype(np.float32)
+  inputs = rng.normal(size=(32, 32, 32, 3)).astype(np.float32)
 
   model = Sequential([
-      InputLayer(input_shape=(256,)),
-      Dense(512, activation='relu'),
-      Dense(256, activation='relu'),
+      InputLayer(input_shape=(32, 32, 3)),
+      Conv2D(16, 3, padding='same', activation='relu'),
+      Conv2D(32, 3, strides=2, padding='same', activation='relu'),
+      Flatten(),
+      Dense(128, activation='relu'),
       Dense(64),
   ])
   model(inputs)
@@ -48,7 +52,7 @@ def main():
     total_original_bytes += summary['original_bytes']
     total_packed_bytes += summary['packed_bytes']
     print(
-        f"  - {summary['layer_name']}: "
+        f"  - {summary['layer_name']} ({summary['layer_type']}): "
         f"ratio={summary['compression_ratio']:.2f}x, "
         f"mse={summary['mean_squared_error']:.6f}, "
         f"max_abs_error={summary['max_abs_error']:.6f}"
