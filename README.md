@@ -29,6 +29,22 @@ the Machine Intelligence team at Google Brain to conduct research in machine
 learning and neural networks. However, the framework is versatile enough to be
 used in other areas as well.
 
+## TurboQuant extension
+
+This fork also carries an experimental `TurboQuant` path for TensorFlow Python
+layers under [`tensorflow/python/ops/turboquant`](tensorflow/python/ops/turboquant/README.md).
+The initial scope is a weight-only, block-wise codebook quantizer for Keras
+`Dense` layers with:
+
+- per-output-channel codebooks,
+- per-block scales,
+- optional full-precision residuals for outliers,
+- model cloning utilities and compression/error summaries.
+
+The design is intentionally conservative: it adds a testable Python-level
+integration first, without coupling the first release of TurboQuant to deeper
+MLIR or SavedModel rewrites.
+
 TensorFlow provides stable [Python](https://www.tensorflow.org/api_docs/python)
 and [C++](https://www.tensorflow.org/api_docs/cc) APIs, as well as a
 non-guaranteed backward compatible API for
