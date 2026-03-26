@@ -8,9 +8,11 @@ from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
 from tensorflow.python.ops.turboquant.core import quantize_tensor
 from tensorflow.python.ops.turboquant.core import summarize_encoding
+from tensorflow.python.ops.turboquant.keras import TurboConv2D
 from tensorflow.python.ops.turboquant.keras import TurboDense
 
 __all__ = [
+    'TurboConv2D',
     'TurboDense',
     'TurboQuantConfig',
     'TurboQuantEncoding',
