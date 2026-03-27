@@ -15,14 +15,20 @@ from tensorflow.python.ops.turboquant.keras import TurboConv1D
 from tensorflow.python.ops.turboquant.keras import TurboConv2D
 from tensorflow.python.ops.turboquant.keras import TurboConv3D
 from tensorflow.python.ops.turboquant.keras import TurboDense
+from tensorflow.python.ops.turboquant.keras import TurboDepthwiseConv2D
+from tensorflow.python.ops.turboquant.keras import TurboSeparableConv1D
+from tensorflow.python.ops.turboquant.keras import TurboSeparableConv2D
 
 __all__ = [
     'TurboConv1D',
     'TurboConv2D',
     'TurboConv3D',
     'TurboDense',
+    'TurboDepthwiseConv2D',
     'TurboQuantConfig',
     'TurboQuantEncoding',
+    'TurboSeparableConv1D',
+    'TurboSeparableConv2D',
     'dequantize_tensor',
     'estimate_packed_bytes',
     'export_saved_model',

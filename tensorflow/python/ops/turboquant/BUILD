@@ -64,6 +64,7 @@ py_library(
         ":config",
         ":core",
         ":keras",
+        "//third_party/py/numpy",
         "//tensorflow/python/eager:def_function",
         "//tensorflow/python/framework:tensor_spec",
         "//tensorflow/python/keras:models",

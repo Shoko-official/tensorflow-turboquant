@@ -25,69 +25,135 @@ from tensorflow.python.ops.turboquant.core import TurboQuantEncoding
 from tensorflow.python.ops.turboquant.core import quantize_tensor
 
 
-def _build_packed_kernel_weights(layer, output_channels, row_count):
+def _packed_attr_name(prefix, name):
+  return f'{prefix}_{name}' if prefix else name
+
+
+def _set_packed_attr(layer, prefix, name, value):
+  setattr(layer, _packed_attr_name(prefix, name), value)
+
+
+def _get_packed_attr(layer, prefix, name):
+  return getattr(layer, _packed_attr_name(prefix, name))
+
+
+def _build_packed_kernel_weights(layer, output_channels, row_count, prefix=None):
   """Creates non-trainable variables for a packed TurboQuant kernel."""
   quantization_config = layer.quantization_config
   num_groups = (
       row_count + quantization_config.group_size - 1
   ) // quantization_config.group_size
-  layer._packed_row_count = int(row_count)
-  layer._packed_output_channels = int(output_channels)
-  layer._packed_num_groups = int(num_groups)
-
-  layer.codebooks = layer.add_weight(
-      'codebooks',
-      shape=[output_channels, quantization_config.levels],
-      initializer='zeros',
-      dtype=layer.dtype,
-      trainable=False)
-  layer.scales = layer.add_weight(
-      'scales',
-      shape=[output_channels, num_groups],
-      initializer='ones',
-      dtype=layer.dtype,
-      trainable=False)
-  layer.indices = layer.add_weight(
-      'indices',
-      shape=[output_channels, num_groups, quantization_config.group_size],
-      initializer='zeros',
-      dtype=dtypes.int32,
-      trainable=False)
-  layer.residual = layer.add_weight(
-      'residual',
-      shape=[output_channels, num_groups, quantization_config.group_size],
-      initializer='zeros',
-      dtype=layer.dtype,
-      trainable=False)
-
-
-def _assign_encoding_state(layer, encoding: TurboQuantEncoding):
-  layer.codebooks.assign(encoding.codebooks)
-  layer.scales.assign(encoding.scales)
-  layer.indices.assign(encoding.indices)
-  layer.residual.assign(encoding.residual)
-
-
-def _dequantize_packed_kernel(layer):
-  gathered = array_ops.gather(
-      layer.codebooks, layer.indices, axis=1, batch_dims=1
+  _set_packed_attr(layer, prefix, '_packed_row_count', int(row_count))
+  _set_packed_attr(
+      layer, prefix, '_packed_output_channels', int(output_channels)
   )
+  _set_packed_attr(layer, prefix, '_packed_num_groups', int(num_groups))
+
+  _set_packed_attr(
+      layer,
+      prefix,
+      'codebooks',
+      layer.add_weight(
+          _packed_attr_name(prefix, 'codebooks'),
+          shape=[output_channels, quantization_config.levels],
+          initializer='zeros',
+          dtype=layer.dtype,
+          trainable=False),
+  )
+  _set_packed_attr(
+      layer,
+      prefix,
+      'scales',
+      layer.add_weight(
+          _packed_attr_name(prefix, 'scales'),
+          shape=[output_channels, num_groups],
+          initializer='ones',
+          dtype=layer.dtype,
+          trainable=False),
+  )
+  _set_packed_attr(
+      layer,
+      prefix,
+      'indices',
+      layer.add_weight(
+          _packed_attr_name(prefix, 'indices'),
+          shape=[output_channels, num_groups, quantization_config.group_size],
+          initializer='zeros',
+          dtype=dtypes.int32,
+          trainable=False),
+  )
+  _set_packed_attr(
+      layer,
+      prefix,
+      'residual',
+      layer.add_weight(
+          _packed_attr_name(prefix, 'residual'),
+          shape=[output_channels, num_groups, quantization_config.group_size],
+          initializer='zeros',
+          dtype=layer.dtype,
+          trainable=False),
+  )
+
+
+def _assign_encoding_state(layer, encoding: TurboQuantEncoding, prefix=None):
+  _get_packed_attr(layer, prefix, 'codebooks').assign(encoding.codebooks)
+  _get_packed_attr(layer, prefix, 'scales').assign(encoding.scales)
+  _get_packed_attr(layer, prefix, 'indices').assign(encoding.indices)
+  _get_packed_attr(layer, prefix, 'residual').assign(encoding.residual)
+
+
+def _dequantize_packed_kernel(layer, prefix=None):
+  codebooks = _get_packed_attr(layer, prefix, 'codebooks')
+  indices = _get_packed_attr(layer, prefix, 'indices')
+  scales = _get_packed_attr(layer, prefix, 'scales')
+  residual = _get_packed_attr(layer, prefix, 'residual')
+  packed_output_channels = _get_packed_attr(
+      layer, prefix, '_packed_output_channels'
+  )
+  packed_num_groups = _get_packed_attr(layer, prefix, '_packed_num_groups')
+  packed_row_count = _get_packed_attr(layer, prefix, '_packed_row_count')
+
+  gathered = array_ops.gather(codebooks, indices, axis=1, batch_dims=1)
   grouped = (
       math_ops.cast(gathered, layer._compute_dtype_object)
       * array_ops.expand_dims(
-          math_ops.cast(layer.scales, layer._compute_dtype_object), axis=-1
+          math_ops.cast(scales, layer._compute_dtype_object), axis=-1
       )
-      + math_ops.cast(layer.residual, layer._compute_dtype_object)
+      + math_ops.cast(residual, layer._compute_dtype_object)
   )
   kernel = array_ops.transpose(grouped, perm=[1, 2, 0])
   kernel = array_ops.reshape(
       kernel,
       [
-          layer._packed_num_groups * layer.quantization_config.group_size,
-          layer._packed_output_channels,
+          packed_num_groups * layer.quantization_config.group_size,
+          packed_output_channels,
       ],
   )
-  return kernel[:layer._packed_row_count, :]
+  return kernel[:packed_row_count, :]
+
+
+def _kernel_row_count(kernel_shape):
+  row_count = 1
+  for dim in kernel_shape[:-1]:
+    row_count *= int(dim)
+  return row_count
+
+
+def _depthwise_row_count(kernel_shape):
+  row_count = 1
+  for dim in kernel_shape[:-2]:
+    row_count *= int(dim)
+  return row_count
+
+
+def _reshape_depthwise_kernel_for_quantization(kernel):
+  row_count = _depthwise_row_count(kernel.shape)
+  return kernel.reshape(row_count, kernel.shape[-2] * kernel.shape[-1])
+
+
+def _dequantize_depthwise_kernel(layer, prefix=None):
+  kernel = _dequantize_packed_kernel(layer, prefix=prefix)
+  return array_ops.reshape(kernel, list(layer._depthwise_kernel_shape))
 
 
 def _build_conv_state(layer, input_shape):
@@ -105,11 +171,11 @@ def _build_conv_state(layer, input_shape):
       input_channel // layer.groups,
       layer.filters,
   )
-  row_count = 1
-  for dim in layer._kernel_shape[:-1]:
-    row_count *= int(dim)
-
-  _build_packed_kernel_weights(layer, layer.filters, row_count)
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=layer.filters,
+      row_count=_kernel_row_count(layer._kernel_shape),
+  )
   if layer.use_bias:
     layer.bias = layer.add_weight(
         name='bias',
@@ -146,6 +212,99 @@ def _build_conv_state(layer, input_shape):
   layer.built = True
 
 
+def _build_depthwise_conv_state(layer, input_shape):
+  """Initializes shared TurboQuant depthwise convolution state."""
+  input_shape = tensor_shape.TensorShape(input_shape)
+  if len(input_shape) < 4:
+    raise ValueError(
+        'Inputs to `DepthwiseConv2D` should have rank 4. '
+        f'Received input shape: {input_shape}.'
+    )
+  channel_axis = layer._get_channel_axis()
+  input_dim = tensor_shape.dimension_value(input_shape[channel_axis])
+  if input_dim is None:
+    raise ValueError(
+        'The channel dimension of the inputs to `DepthwiseConv2D` '
+        'should be defined. Found `None`.'
+    )
+
+  input_dim = int(input_dim)
+  layer._depthwise_kernel_shape = (
+      layer.kernel_size[0],
+      layer.kernel_size[1],
+      input_dim,
+      layer.depth_multiplier,
+  )
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=input_dim * layer.depth_multiplier,
+      row_count=_depthwise_row_count(layer._depthwise_kernel_shape),
+  )
+  if layer.use_bias:
+    layer.bias = layer.add_weight(
+        name='bias',
+        shape=(input_dim * layer.depth_multiplier,),
+        initializer=layer.bias_initializer,
+        regularizer=layer.bias_regularizer,
+        constraint=layer.bias_constraint,
+        trainable=False,
+        dtype=layer.dtype)
+  else:
+    layer.bias = None
+
+  layer.input_spec = InputSpec(ndim=4, axes={channel_axis: input_dim})
+  layer.built = True
+
+
+def _build_separable_conv_state(layer, input_shape):
+  """Initializes shared TurboQuant separable convolution state."""
+  input_shape = tensor_shape.TensorShape(input_shape)
+  channel_axis = layer._get_channel_axis()
+  input_dim = tensor_shape.dimension_value(input_shape[channel_axis])
+  if input_dim is None:
+    raise ValueError(
+        'The channel dimension of the inputs should be defined. '
+        'Found `None`.'
+    )
+
+  input_dim = int(input_dim)
+  layer.input_spec = InputSpec(
+      ndim=layer.rank + 2, axes={channel_axis: input_dim}
+  )
+  layer._depthwise_kernel_shape = layer.kernel_size + (
+      input_dim,
+      layer.depth_multiplier,
+  )
+  layer._pointwise_kernel_shape = (1,) * layer.rank + (
+      input_dim * layer.depth_multiplier,
+      layer.filters,
+  )
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=input_dim * layer.depth_multiplier,
+      row_count=_depthwise_row_count(layer._depthwise_kernel_shape),
+      prefix='depthwise',
+  )
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=layer.filters,
+      row_count=_kernel_row_count(layer._pointwise_kernel_shape),
+      prefix='pointwise',
+  )
+  if layer.use_bias:
+    layer.bias = layer.add_weight(
+        name='bias',
+        shape=(layer.filters,),
+        initializer=layer.bias_initializer,
+        regularizer=layer.bias_regularizer,
+        constraint=layer.bias_constraint,
+        trainable=False,
+        dtype=layer.dtype)
+  else:
+    layer.bias = None
+  layer.built = True
+
+
 def _quantize_from_conv(layer, conv_layer: Layer):
   weights = conv_layer.get_weights()
   if not weights:
@@ -157,7 +316,44 @@ def _quantize_from_conv(layer, conv_layer: Layer):
     layer.build(conv_layer.input_shape)
   _assign_encoding_state(layer, encoding)
   if layer.use_bias and conv_layer.use_bias:
-    layer.bias.assign(conv_layer.get_weights()[1])
+    layer.bias.assign(weights[1])
+
+
+def _quantize_from_depthwise(layer, conv_layer: Layer):
+  weights = conv_layer.get_weights()
+  if not weights:
+    raise ValueError(
+        f'Layer `{conv_layer.name}` must be built before quantization.'
+    )
+  depthwise_kernel = weights[0]
+  encoding = quantize_tensor(
+      _reshape_depthwise_kernel_for_quantization(depthwise_kernel),
+      layer.quantization_config,
+  )
+  if not layer.built:
+    layer.build(conv_layer.input_shape)
+  _assign_encoding_state(layer, encoding)
+  if layer.use_bias and conv_layer.use_bias:
+    layer.bias.assign(weights[1])
+
+
+def _quantize_from_separable(layer, conv_layer: Layer):
+  weights = conv_layer.get_weights()
+  if len(weights) < 2:
+    raise ValueError(
+        f'Layer `{conv_layer.name}` must be built before quantization.'
+    )
+  if not layer.built:
+    layer.build(conv_layer.input_shape)
+  depthwise_encoding = quantize_tensor(
+      _reshape_depthwise_kernel_for_quantization(weights[0]),
+      layer.quantization_config,
+  )
+  pointwise_encoding = quantize_tensor(weights[1], layer.quantization_config)
+  _assign_encoding_state(layer, depthwise_encoding, prefix='depthwise')
+  _assign_encoding_state(layer, pointwise_encoding, prefix='pointwise')
+  if layer.use_bias and conv_layer.use_bias:
+    layer.bias.assign(weights[2])
 
 
 def _call_quantized_conv(layer, inputs):
@@ -186,6 +382,91 @@ def _call_quantized_conv(layer, inputs):
   if not context.executing_eagerly():
     outputs.set_shape(layer.compute_output_shape(inputs.shape))
 
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_depthwise_conv(layer, inputs):
+  outputs = backend.depthwise_conv2d(
+      inputs,
+      layer.dequantized_kernel(),
+      strides=layer.strides,
+      padding=layer.padding,
+      dilation_rate=layer.dilation_rate,
+      data_format=layer.data_format)
+  if layer.use_bias:
+    outputs = nn.bias_add(
+        outputs,
+        layer.bias,
+        data_format=conv_utils.convert_data_format(layer.data_format, ndim=4))
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_separable_conv1d(layer, inputs):
+  if layer.padding == 'causal':
+    inputs = array_ops.pad(inputs, layer._compute_causal_padding(inputs))
+  if layer.data_format == 'channels_last':
+    strides = (1,) + layer.strides * 2 + (1,)
+    spatial_start_dim = 1
+  else:
+    strides = (1, 1) + layer.strides * 2
+    spatial_start_dim = 2
+
+  inputs = array_ops.expand_dims(inputs, spatial_start_dim)
+  depthwise_kernel = array_ops.expand_dims(
+      layer.dequantized_depthwise_kernel(), 0
+  )
+  pointwise_kernel = array_ops.expand_dims(
+      layer.dequantized_pointwise_kernel(), 0
+  )
+  dilation_rate = (1,) + layer.dilation_rate
+  if layer.padding == 'causal':
+    op_padding = 'valid'
+  else:
+    op_padding = layer.padding
+  outputs = nn.separable_conv2d(
+      inputs,
+      depthwise_kernel,
+      pointwise_kernel,
+      strides=strides,
+      padding=op_padding.upper(),
+      rate=dilation_rate,
+      data_format=conv_utils.convert_data_format(layer.data_format, ndim=4))
+
+  if layer.use_bias:
+    outputs = nn.bias_add(
+        outputs,
+        layer.bias,
+        data_format=conv_utils.convert_data_format(layer.data_format, ndim=4))
+
+  outputs = array_ops.squeeze(outputs, [spatial_start_dim])
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_separable_conv2d(layer, inputs):
+  if layer.data_format == 'channels_last':
+    strides = (1,) + layer.strides + (1,)
+  else:
+    strides = (1, 1) + layer.strides
+  outputs = nn.separable_conv2d(
+      inputs,
+      layer.dequantized_depthwise_kernel(),
+      layer.dequantized_pointwise_kernel(),
+      strides=strides,
+      padding=layer.padding.upper(),
+      rate=layer.dilation_rate,
+      data_format=conv_utils.convert_data_format(layer.data_format, ndim=4))
+
+  if layer.use_bias:
+    outputs = nn.bias_add(
+        outputs,
+        layer.bias,
+        data_format=conv_utils.convert_data_format(layer.data_format, ndim=4))
   if layer.activation is not None:
     return layer.activation(outputs)
   return outputs
@@ -416,5 +697,96 @@ class TurboConv3D(convolutional.Conv3D):
 
   def get_config(self):
     config = super(TurboConv3D, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboDepthwiseConv2D(convolutional.DepthwiseConv2D):
+  """Inference-oriented DepthwiseConv2D layer backed by TurboQuant."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboDepthwiseConv2D, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._depthwise_kernel_shape = None
+
+  def build(self, input_shape):
+    _build_depthwise_conv_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_depthwise(self, conv_layer)
+
+  def dequantized_kernel(self):
+    return _dequantize_depthwise_kernel(self)
+
+  def call(self, inputs):
+    return _call_quantized_depthwise_conv(self, inputs)
+
+  def get_config(self):
+    config = super(TurboDepthwiseConv2D, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboSeparableConv1D(convolutional.SeparableConv1D):
+  """Inference-oriented SeparableConv1D layer backed by TurboQuant."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboSeparableConv1D, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._depthwise_kernel_shape = None
+    self._pointwise_kernel_shape = None
+
+  def build(self, input_shape):
+    _build_separable_conv_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_separable(self, conv_layer)
+
+  def dequantized_depthwise_kernel(self):
+    return _dequantize_depthwise_kernel(self, prefix='depthwise')
+
+  def dequantized_pointwise_kernel(self):
+    kernel = _dequantize_packed_kernel(self, prefix='pointwise')
+    return array_ops.reshape(kernel, list(self._pointwise_kernel_shape))
+
+  def call(self, inputs):
+    return _call_quantized_separable_conv1d(self, inputs)
+
+  def get_config(self):
+    config = super(TurboSeparableConv1D, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboSeparableConv2D(convolutional.SeparableConv2D):
+  """Inference-oriented SeparableConv2D layer backed by TurboQuant."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboSeparableConv2D, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._depthwise_kernel_shape = None
+    self._pointwise_kernel_shape = None
+
+  def build(self, input_shape):
+    _build_separable_conv_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_separable(self, conv_layer)
+
+  def dequantized_depthwise_kernel(self):
+    return _dequantize_depthwise_kernel(self, prefix='depthwise')
+
+  def dequantized_pointwise_kernel(self):
+    kernel = _dequantize_packed_kernel(self, prefix='pointwise')
+    return array_ops.reshape(kernel, list(self._pointwise_kernel_shape))
+
+  def call(self, inputs):
+    return _call_quantized_separable_conv2d(self, inputs)
+
+  def get_config(self):
+    config = super(TurboSeparableConv2D, self).get_config()
     config['quantization_config'] = self.quantization_config.to_dict()
     return config
