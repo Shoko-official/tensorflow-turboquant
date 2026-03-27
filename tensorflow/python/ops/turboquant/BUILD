@@ -64,9 +64,12 @@ py_library(
         ":config",
         ":core",
         ":keras",
+        "//tensorflow/python/eager:def_function",
+        "//tensorflow/python/framework:tensor_spec",
         "//tensorflow/python/keras:models",
         "//tensorflow/python/keras/layers:convolutional",
         "//tensorflow/python/keras/layers:core",
+        "//tensorflow/python/saved_model",
     ],
 )
 
@@ -103,6 +106,7 @@ py_test(
         ":keras",
         "//tensorflow/python/eager:def_function",
         "//tensorflow/python/keras",
+        "//tensorflow/python/saved_model",
         "//tensorflow/python/platform:client_testlib",
         "//third_party/py/numpy",
     ],
