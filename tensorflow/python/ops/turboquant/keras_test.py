@@ -12,6 +12,7 @@ from tensorflow.python.keras.layers import Conv2D
 from tensorflow.python.keras.layers import Conv3D
 from tensorflow.python.keras.layers import Dense
 from tensorflow.python.keras.layers import DepthwiseConv2D
+from tensorflow.python.keras.layers import Embedding
 from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
 from tensorflow.python.keras.layers import SeparableConv1D
@@ -26,6 +27,7 @@ from tensorflow.python.ops.turboquant.keras import TurboConv2D
 from tensorflow.python.ops.turboquant.keras import TurboConv3D
 from tensorflow.python.ops.turboquant.keras import TurboDense
 from tensorflow.python.ops.turboquant.keras import TurboDepthwiseConv2D
+from tensorflow.python.ops.turboquant.keras import TurboEmbedding
 from tensorflow.python.ops.turboquant.keras import TurboSeparableConv1D
 from tensorflow.python.ops.turboquant.keras import TurboSeparableConv2D
 from tensorflow.python.platform import test
@@ -50,6 +52,23 @@ class TurboKerasIntegrationTest(test.TestCase):
         layer for layer in quantized_model.layers if isinstance(layer, TurboDense)
     ]
     self.assertLen(dense_like_layers, 2)
+
+  def test_quantize_model_replaces_embedding_layers(self):
+    model = Sequential([
+        InputLayer(input_shape=(12,), dtype='int32'),
+        Embedding(1024, 64),
+    ])
+    model(np.ones((2, 12), dtype=np.int32))
+
+    quantized_model = quantize_model(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+
+    embedding_like_layers = [
+        layer for layer in quantized_model.layers if isinstance(layer, TurboEmbedding)
+    ]
+    self.assertLen(embedding_like_layers, 1)
 
   def test_quantize_model_replaces_conv2d_layers(self):
     model = Sequential([
@@ -175,6 +194,30 @@ class TurboKerasIntegrationTest(test.TestCase):
     quantized = quantized_model(inputs)
 
     self.assertAllClose(reference, quantized, atol=0.2, rtol=0.2)
+
+  def test_quantized_embedding_model_stays_close_to_reference(self):
+    rng = np.random.default_rng(29)
+    inputs = rng.integers(0, 1024, size=(8, 12), dtype=np.int32)
+
+    model = Sequential([
+        InputLayer(input_shape=(12,), dtype='int32'),
+        Embedding(1024, 64),
+        Flatten(),
+        Dense(16),
+    ])
+    model(inputs)
+
+    quantized_model = quantize_model(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+
+    self.assertTrue(
+        any(isinstance(layer, TurboEmbedding) for layer in quantized_model.layers)
+    )
+    self.assertAllClose(
+        model(inputs), quantized_model(inputs), atol=0.25, rtol=0.25
+    )
 
   def test_quantized_conv2d_model_stays_close_to_reference(self):
     rng = np.random.default_rng(123)
@@ -320,6 +363,18 @@ class TurboKerasIntegrationTest(test.TestCase):
     self.assertLen(summaries, 2)
     self.assertTrue(all(summary['compression_ratio'] > 1.0 for summary in summaries))
 
+  def test_summarize_model_reports_embedding_layers(self):
+    model = Sequential([
+        InputLayer(input_shape=(12,), dtype='int32'),
+        Embedding(1024, 64),
+    ])
+    model(np.ones((1, 12), dtype=np.int32))
+
+    summaries = summarize_model(model, TurboQuantConfig(group_size=8))
+
+    self.assertLen(summaries, 1)
+    self.assertEqual(summaries[0]['layer_type'], 'Embedding')
+
   def test_summarize_model_reports_conv2d_layers(self):
     model = Sequential([
         InputLayer(input_shape=(16, 16, 3)),
@@ -411,6 +466,36 @@ class TurboKerasIntegrationTest(test.TestCase):
         any(isinstance(layer, TurboSeparableConv2D) for layer in quantized_model.layers)
     )
     self.assertTrue(any(isinstance(layer, TurboDense) for layer in quantized_model.layers))
+    self.assertAllClose(
+        quantized_model(inputs), loaded_outputs, atol=1e-5, rtol=1e-5
+    )
+
+  def test_export_saved_model_round_trip_preserves_turbo_embedding(self):
+    rng = np.random.default_rng(17)
+    inputs = rng.integers(0, 2048, size=(4, 10), dtype=np.int32)
+
+    model = Sequential([
+        InputLayer(input_shape=(10,), dtype='int32'),
+        Embedding(2048, 64),
+        Flatten(),
+        Dense(8),
+    ])
+    model(inputs)
+
+    export_dir = os.path.join(self.get_temp_dir(), 'turboquant_embedding_saved_model')
+    quantized_model = export_saved_model(
+        model,
+        export_dir,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    loaded_model = load_saved_model(export_dir)
+    loaded_outputs = loaded_model.signatures['serving_default'](
+        constant_op.constant(inputs)
+    )['outputs']
+
+    self.assertTrue(
+        any(isinstance(layer, TurboEmbedding) for layer in quantized_model.layers)
+    )
     self.assertAllClose(
         quantized_model(inputs), loaded_outputs, atol=1e-5, rtol=1e-5
     )
