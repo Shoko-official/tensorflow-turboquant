@@ -26,6 +26,18 @@ py_library(
 )
 
 py_library(
+    name = "calibration",
+    srcs = ["calibration.py"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = [
+        ":config",
+        "//third_party/py/numpy",
+        "//tensorflow/python/keras:models",
+    ],
+)
+
+py_library(
     name = "keras",
     srcs = ["keras.py"],
     srcs_version = "PY3",
@@ -44,9 +56,11 @@ py_library(
         "//tensorflow/python/keras/engine:input_spec",
         "//tensorflow/python/keras/initializers",
         "//tensorflow/python/keras/layers:convolutional",
+        "//tensorflow/python/keras/layers:embeddings",
         "//tensorflow/python/keras/utils:generic_utils",
         "//tensorflow/python/keras/utils:engine_utils",
         "//tensorflow/python/ops:array_ops",
+        "//tensorflow/python/ops:embedding_ops",
         "//tensorflow/python/ops:nn",
         "//tensorflow/python/ops:math_ops",
         "//tensorflow/python/ops:nn_ops",
@@ -61,6 +75,7 @@ py_library(
     srcs_version = "PY3",
     strict_deps = False,
     deps = [
+        ":calibration",
         ":config",
         ":core",
         ":keras",
@@ -70,6 +85,7 @@ py_library(
         "//tensorflow/python/keras:models",
         "//tensorflow/python/keras/layers:convolutional",
         "//tensorflow/python/keras/layers:core",
+        "//tensorflow/python/keras/layers:embeddings",
         "//tensorflow/python/saved_model",
     ],
 )
@@ -81,6 +97,7 @@ py_library(
     strict_deps = False,
     deps = [
         ":api",
+        ":calibration",
         ":config",
         ":core",
         ":keras",
@@ -108,6 +125,20 @@ py_test(
         "//tensorflow/python/eager:def_function",
         "//tensorflow/python/keras",
         "//tensorflow/python/saved_model",
+        "//tensorflow/python/platform:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "calibration_test",
+    srcs = ["calibration_test.py"],
+    deps = [
+        ":api",
+        ":calibration",
+        ":config",
+        ":keras",
+        "//tensorflow/python/keras",
         "//tensorflow/python/platform:client_testlib",
         "//third_party/py/numpy",
     ],

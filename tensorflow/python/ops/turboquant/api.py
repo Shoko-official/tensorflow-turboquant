@@ -7,6 +7,8 @@ from tensorflow.python.framework import tensor_spec
 from tensorflow.python.keras import models
 from tensorflow.python.keras.layers import convolutional as convolutional_layers
 from tensorflow.python.keras.layers import core as core_layers
+from tensorflow.python.keras.layers import embeddings as embeddings_layers
+from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
@@ -17,6 +19,7 @@ from tensorflow.python.ops.turboquant.keras import TurboConv2D
 from tensorflow.python.ops.turboquant.keras import TurboConv3D
 from tensorflow.python.ops.turboquant.keras import TurboDense
 from tensorflow.python.ops.turboquant.keras import TurboDepthwiseConv2D
+from tensorflow.python.ops.turboquant.keras import TurboEmbedding
 from tensorflow.python.ops.turboquant.keras import TurboSeparableConv1D
 from tensorflow.python.ops.turboquant.keras import TurboSeparableConv2D
 from tensorflow.python.saved_model import load as saved_model_load
@@ -24,6 +27,7 @@ from tensorflow.python.saved_model import save as saved_model_save
 
 
 _SUPPORTED_LAYER_TYPES = (
+    embeddings_layers.Embedding,
     core_layers.Dense,
     convolutional_layers.Conv1D,
     convolutional_layers.Conv2D,
@@ -34,6 +38,7 @@ _SUPPORTED_LAYER_TYPES = (
 )
 
 _QUANTIZED_LAYER_TYPES = (
+    TurboEmbedding,
     TurboDense,
     TurboConv1D,
     TurboConv2D,
@@ -47,6 +52,7 @@ _QUANTIZED_LAYER_TYPES = (
 def get_custom_objects():
   """Returns custom objects required to deserialize TurboQuant wrappers."""
   return {
+      'TurboEmbedding': TurboEmbedding,
       'TurboDense': TurboDense,
       'TurboConv1D': TurboConv1D,
       'TurboConv2D': TurboConv2D,
@@ -99,6 +105,8 @@ def _kernel_component_summary(kernel_name, kernel, quantization_config):
 
 
 def _layer_kernel_components(layer):
+  if isinstance(layer, TurboEmbedding):
+    return [('embeddings', np.asarray(layer.dequantized_embeddings()))]
   if isinstance(layer, TurboDense):
     return [('kernel', np.asarray(layer.dequantized_kernel()))]
   if isinstance(layer, (TurboConv1D, TurboConv2D, TurboConv3D)):
@@ -115,6 +123,8 @@ def _layer_kernel_components(layer):
   if not weights:
     return []
   if isinstance(layer, _SUPPORTED_LAYER_TYPES):
+    if isinstance(layer, embeddings_layers.Embedding):
+      return [('embeddings', weights[0])]
     if isinstance(layer, (convolutional_layers.SeparableConv1D,
                           convolutional_layers.SeparableConv2D)):
       return [
@@ -206,6 +216,26 @@ def _layer_quantization_summary(layer, quantization_config: TurboQuantConfig):
   return summary
 
 
+def _merge_calibration_stats(summary, calibration_stats):
+  if not calibration_stats:
+    return summary
+  stats = calibration_stats.get(summary['layer_name'])
+  if not stats:
+    return summary
+
+  output_rms = max(float(stats['output_rms']), 1e-8)
+  output_abs_max = max(float(stats['output_abs_max']), 1e-8)
+  summary['calibration'] = dict(stats)
+  if 'mean_squared_error' in summary:
+    summary['normalized_mean_squared_error'] = (
+        float(summary['mean_squared_error']) / float(output_rms * output_rms)
+    )
+    summary['normalized_max_abs_error'] = (
+        float(summary['max_abs_error']) / float(output_abs_max)
+    )
+  return summary
+
+
 def _should_quantize_layer(layer, quantization_config: TurboQuantConfig) -> bool:
   return (
       _layer_quantization_summary(layer, quantization_config)['status']
@@ -221,6 +251,8 @@ def _clone_layer(layer, quantization_config: TurboQuantConfig):
   layer_config['quantization_config'] = quantization_config.to_dict()
   layer_config['trainable'] = False
 
+  if isinstance(layer, embeddings_layers.Embedding):
+    return TurboEmbedding(**layer_config)
   if isinstance(layer, core_layers.Dense):
     return TurboDense(**layer_config)
   if isinstance(layer, convolutional_layers.DepthwiseConv2D):
@@ -257,6 +289,7 @@ def quantize_model(model, quantization_config=None):
     quantized_model.build(model.input_shape)
 
   quantized_layer_types = (
+      TurboEmbedding,
       TurboConv1D,
       TurboConv2D,
       TurboConv3D,
@@ -266,7 +299,9 @@ def quantize_model(model, quantization_config=None):
   )
   for layer in model.layers:
     cloned_layer = quantized_model.get_layer(layer.name)
-    if isinstance(cloned_layer, TurboDense):
+    if isinstance(cloned_layer, TurboEmbedding):
+      cloned_layer.quantize_from_embedding(layer)
+    elif isinstance(cloned_layer, TurboDense):
       cloned_layer.quantize_from_dense(layer)
     elif isinstance(cloned_layer, quantized_layer_types):
       cloned_layer.quantize_from_conv(layer)
@@ -278,12 +313,16 @@ def quantize_model(model, quantization_config=None):
   return quantized_model
 
 
-def summarize_model(model, quantization_config=None, include_skipped=False):
+def summarize_model(model,
+                    quantization_config=None,
+                    include_skipped=False,
+                    calibration_stats=None):
   """Collects per-layer TurboQuant summaries for supported kernels."""
   quantization_config = TurboQuantConfig.from_dict(quantization_config)
   summaries = []
   for layer in model.layers:
     summary = _layer_quantization_summary(layer, quantization_config)
+    summary = _merge_calibration_stats(summary, calibration_stats)
     if summary['status'] != 'quantized' and not include_skipped:
       continue
     summaries.append(summary)

@@ -69,3 +69,32 @@ class TurboQuantConfig:
     if isinstance(config, cls):
       return config
     return cls(**config) if config else cls()
+
+
+@dataclass(frozen=True)
+class CalibrationConfig:
+  """Configuration for representative-dataset calibration."""
+
+  max_steps: int = 32
+  max_samples: int = 4096
+
+  def __post_init__(self):
+    if self.max_steps < 1:
+      raise ValueError(
+          '`max_steps` must be a positive integer. '
+          f'Got: {self.max_steps}.'
+      )
+    if self.max_samples < 1:
+      raise ValueError(
+          '`max_samples` must be a positive integer. '
+          f'Got: {self.max_samples}.'
+      )
+
+  def to_dict(self) -> dict[str, object]:
+    return asdict(self)
+
+  @classmethod
+  def from_dict(cls, config: dict[str, object] | None) -> 'CalibrationConfig':
+    if isinstance(config, cls):
+      return config
+    return cls(**config) if config else cls()

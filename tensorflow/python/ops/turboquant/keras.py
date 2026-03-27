@@ -13,9 +13,11 @@ from tensorflow.python.keras import regularizers
 from tensorflow.python.keras.engine.base_layer import Layer
 from tensorflow.python.keras.engine.input_spec import InputSpec
 from tensorflow.python.keras.layers import convolutional
+from tensorflow.python.keras.layers import embeddings as embeddings_layers
 from tensorflow.python.keras.utils import conv_utils
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import embedding_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn
 from tensorflow.python.ops import nn_ops
@@ -212,6 +214,16 @@ def _build_conv_state(layer, input_shape):
   layer.built = True
 
 
+def _build_embedding_state(layer):
+  """Initializes shared TurboQuant embedding state."""
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=layer.output_dim,
+      row_count=layer.input_dim,
+  )
+  layer.built = True
+
+
 def _build_depthwise_conv_state(layer, input_shape):
   """Initializes shared TurboQuant depthwise convolution state."""
   input_shape = tensor_shape.TensorShape(input_shape)
@@ -317,6 +329,18 @@ def _quantize_from_conv(layer, conv_layer: Layer):
   _assign_encoding_state(layer, encoding)
   if layer.use_bias and conv_layer.use_bias:
     layer.bias.assign(weights[1])
+
+
+def _quantize_from_embedding(layer, embedding_layer: Layer):
+  weights = embedding_layer.get_weights()
+  if not weights:
+    raise ValueError(
+        f'Layer `{embedding_layer.name}` must be built before quantization.'
+    )
+  encoding = quantize_tensor(weights[0], layer.quantization_config)
+  if not layer.built:
+    layer.build()
+  _assign_encoding_state(layer, encoding)
 
 
 def _quantize_from_depthwise(layer, conv_layer: Layer):
@@ -614,6 +638,40 @@ class TurboDense(Layer):
         'bias_constraint': constraints.serialize(self.bias_constraint),
         'quantization_config': self.quantization_config.to_dict(),
     })
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboEmbedding(embeddings_layers.Embedding):
+  """Inference-oriented Embedding layer backed by TurboQuant packed weights."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboEmbedding, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+
+  def build(self, input_shape=None):
+    _build_embedding_state(self)
+
+  def quantize_from_embedding(self, embedding_layer: Layer):
+    _quantize_from_embedding(self, embedding_layer)
+
+  def dequantized_embeddings(self):
+    return _dequantize_packed_kernel(self)
+
+  def call(self, inputs):
+    dtype = backend.dtype(inputs)
+    if dtype != 'int32' and dtype != 'int64':
+      inputs = math_ops.cast(inputs, 'int32')
+    outputs = embedding_ops.embedding_lookup_v2(
+        self.dequantized_embeddings(), inputs
+    )
+    if self._dtype_policy.compute_dtype != self._dtype_policy.variable_dtype:
+      outputs = math_ops.cast(outputs, self._dtype_policy.compute_dtype)
+    return outputs
+
+  def get_config(self):
+    config = super(TurboEmbedding, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
     return config
 
 
