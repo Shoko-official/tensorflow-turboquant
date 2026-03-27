@@ -11,8 +11,11 @@ from tensorflow.python.keras.layers import Conv1D
 from tensorflow.python.keras.layers import Conv2D
 from tensorflow.python.keras.layers import Conv3D
 from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.layers import DepthwiseConv2D
 from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
+from tensorflow.python.keras.layers import SeparableConv1D
+from tensorflow.python.keras.layers import SeparableConv2D
 from tensorflow.python.ops.turboquant.api import export_saved_model
 from tensorflow.python.ops.turboquant.api import load_saved_model
 from tensorflow.python.ops.turboquant.api import quantize_model
@@ -22,6 +25,9 @@ from tensorflow.python.ops.turboquant.keras import TurboConv1D
 from tensorflow.python.ops.turboquant.keras import TurboConv2D
 from tensorflow.python.ops.turboquant.keras import TurboConv3D
 from tensorflow.python.ops.turboquant.keras import TurboDense
+from tensorflow.python.ops.turboquant.keras import TurboDepthwiseConv2D
+from tensorflow.python.ops.turboquant.keras import TurboSeparableConv1D
+from tensorflow.python.ops.turboquant.keras import TurboSeparableConv2D
 from tensorflow.python.platform import test
 
 
@@ -94,6 +100,61 @@ class TurboKerasIntegrationTest(test.TestCase):
         2,
     )
 
+  def test_quantize_model_replaces_depthwise_and_separable_layers(self):
+    depthwise_model = Sequential([
+        InputLayer(input_shape=(24, 24, 64)),
+        DepthwiseConv2D(5, padding='same', depth_multiplier=1, activation='relu'),
+    ])
+    depthwise_model(np.ones((2, 24, 24, 64), dtype=np.float32))
+    quantized_depthwise = quantize_model(
+        depthwise_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+    self.assertLen(
+        [
+            layer
+            for layer in quantized_depthwise.layers
+            if isinstance(layer, TurboDepthwiseConv2D)
+        ],
+        1,
+    )
+
+    separable_1d_model = Sequential([
+        InputLayer(input_shape=(96, 64)),
+        SeparableConv1D(32, 5, padding='same', depth_multiplier=1, activation='relu'),
+    ])
+    separable_1d_model(np.ones((2, 96, 64), dtype=np.float32))
+    quantized_separable_1d = quantize_model(
+        separable_1d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+    self.assertLen(
+        [
+            layer
+            for layer in quantized_separable_1d.layers
+            if isinstance(layer, TurboSeparableConv1D)
+        ],
+        1,
+    )
+
+    separable_2d_model = Sequential([
+        InputLayer(input_shape=(24, 24, 64)),
+        SeparableConv2D(24, 5, padding='same', depth_multiplier=1, activation='relu'),
+    ])
+    separable_2d_model(np.ones((2, 24, 24, 64), dtype=np.float32))
+    quantized_separable_2d = quantize_model(
+        separable_2d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+    self.assertLen(
+        [
+            layer
+            for layer in quantized_separable_2d.layers
+            if isinstance(layer, TurboSeparableConv2D)
+        ],
+        1,
+    )
+
   def test_quantized_model_stays_close_to_reference(self):
     rng = np.random.default_rng(13)
     inputs = rng.normal(size=(8, 64)).astype(np.float32)
@@ -137,6 +198,61 @@ class TurboKerasIntegrationTest(test.TestCase):
     quantized = quantized_model(inputs)
 
     self.assertAllClose(reference, quantized, atol=0.35, rtol=0.35)
+
+  def test_quantized_depthwise_and_separable_models_stay_close_to_reference(self):
+    rng = np.random.default_rng(1234)
+
+    depthwise_inputs = rng.normal(size=(4, 24, 24, 64)).astype(np.float32)
+    depthwise_model = Sequential([
+        InputLayer(input_shape=(24, 24, 64)),
+        DepthwiseConv2D(5, padding='same', depth_multiplier=1, activation='relu'),
+        Conv2D(8, 1),
+    ])
+    depthwise_model(depthwise_inputs)
+    quantized_depthwise = quantize_model(
+        depthwise_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    self.assertAllClose(
+        depthwise_model(depthwise_inputs),
+        quantized_depthwise(depthwise_inputs),
+        atol=0.35,
+        rtol=0.35,
+    )
+
+    separable_1d_inputs = rng.normal(size=(4, 96, 64)).astype(np.float32)
+    separable_1d_model = Sequential([
+        InputLayer(input_shape=(96, 64)),
+        SeparableConv1D(32, 5, padding='same', depth_multiplier=1, activation='relu'),
+    ])
+    separable_1d_model(separable_1d_inputs)
+    quantized_separable_1d = quantize_model(
+        separable_1d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    self.assertAllClose(
+        separable_1d_model(separable_1d_inputs),
+        quantized_separable_1d(separable_1d_inputs),
+        atol=0.35,
+        rtol=0.35,
+    )
+
+    separable_2d_inputs = rng.normal(size=(2, 24, 24, 64)).astype(np.float32)
+    separable_2d_model = Sequential([
+        InputLayer(input_shape=(24, 24, 64)),
+        SeparableConv2D(24, 5, padding='same', depth_multiplier=1, activation='relu'),
+    ])
+    separable_2d_model(separable_2d_inputs)
+    quantized_separable_2d = quantize_model(
+        separable_2d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    self.assertAllClose(
+        separable_2d_model(separable_2d_inputs),
+        quantized_separable_2d(separable_2d_inputs),
+        atol=0.35,
+        rtol=0.35,
+    )
 
   def test_turbodense_runs_in_tf_function(self):
     model = Sequential([
@@ -217,6 +333,22 @@ class TurboKerasIntegrationTest(test.TestCase):
     self.assertLen(summaries, 2)
     self.assertTrue(all(summary['layer_type'] == 'Conv2D' for summary in summaries))
 
+  def test_summarize_model_reports_depthwise_and_separable_components(self):
+    model = Sequential([
+        InputLayer(input_shape=(24, 24, 64)),
+        DepthwiseConv2D(5, padding='same', depth_multiplier=1, activation='relu'),
+        SeparableConv2D(24, 5, padding='same', depth_multiplier=1),
+    ])
+    model(np.ones((1, 24, 24, 64), dtype=np.float32))
+
+    summaries = summarize_model(model, TurboQuantConfig(group_size=8))
+
+    self.assertLen(summaries, 2)
+    self.assertEqual(summaries[0]['layer_type'], 'DepthwiseConv2D')
+    self.assertEqual(summaries[1]['layer_type'], 'SeparableConv2D')
+    self.assertIn('kernel_components', summaries[1])
+    self.assertLen(summaries[1]['kernel_components'], 2)
+
   def test_summarize_model_can_include_skipped_layers_with_reasons(self):
     model = Sequential([
         InputLayer(input_shape=(8,)),
@@ -250,11 +382,12 @@ class TurboKerasIntegrationTest(test.TestCase):
 
   def test_export_saved_model_round_trip_preserves_turbo_layers(self):
     rng = np.random.default_rng(5)
-    inputs = rng.normal(size=(4, 16, 16, 3)).astype(np.float32)
+    inputs = rng.normal(size=(4, 12, 12, 64)).astype(np.float32)
 
     model = Sequential([
-        InputLayer(input_shape=(16, 16, 3)),
-        Conv2D(12, 3, padding='same', activation='relu'),
+        InputLayer(input_shape=(12, 12, 64)),
+        DepthwiseConv2D(5, padding='same', depth_multiplier=1, activation='relu'),
+        SeparableConv2D(12, 5, padding='same', depth_multiplier=1, activation='relu'),
         Flatten(),
         Dense(6),
     ])
@@ -271,7 +404,12 @@ class TurboKerasIntegrationTest(test.TestCase):
         constant_op.constant(inputs)
     )['outputs']
 
-    self.assertTrue(any(isinstance(layer, TurboConv2D) for layer in quantized_model.layers))
+    self.assertTrue(
+        any(isinstance(layer, TurboDepthwiseConv2D) for layer in quantized_model.layers)
+    )
+    self.assertTrue(
+        any(isinstance(layer, TurboSeparableConv2D) for layer in quantized_model.layers)
+    )
     self.assertTrue(any(isinstance(layer, TurboDense) for layer in quantized_model.layers))
     self.assertAllClose(
         quantized_model(inputs), loaded_outputs, atol=1e-5, rtol=1e-5

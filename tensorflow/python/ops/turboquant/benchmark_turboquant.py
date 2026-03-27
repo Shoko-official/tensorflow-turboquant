@@ -7,8 +7,10 @@ import numpy as np
 from tensorflow.python.keras import Sequential
 from tensorflow.python.keras.layers import Conv2D
 from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.layers import DepthwiseConv2D
 from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
+from tensorflow.python.keras.layers import SeparableConv2D
 from tensorflow.python.ops.turboquant.api import quantize_model
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
@@ -26,11 +28,12 @@ def _measure_latency(model, inputs, warmup=10, steps=50):
 
 def main():
   rng = np.random.default_rng(123)
-  inputs = rng.normal(size=(32, 32, 32, 3)).astype(np.float32)
+  inputs = rng.normal(size=(16, 24, 24, 64)).astype(np.float32)
 
   model = Sequential([
-      InputLayer(input_shape=(32, 32, 3)),
-      Conv2D(16, 3, padding='same', activation='relu'),
+      InputLayer(input_shape=(24, 24, 64)),
+      DepthwiseConv2D(5, padding='same', depth_multiplier=1, activation='relu'),
+      SeparableConv2D(32, 5, padding='same', depth_multiplier=1, activation='relu'),
       Conv2D(32, 3, strides=2, padding='same', activation='relu'),
       Flatten(),
       Dense(128, activation='relu'),
@@ -38,7 +41,7 @@ def main():
   ])
   model(inputs)
 
-  config = TurboQuantConfig(num_bits=4, group_size=64, outlier_threshold=6.0)
+  config = TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0)
   quantized_model = quantize_model(model, config)
 
   reference_outputs = model(inputs).numpy()

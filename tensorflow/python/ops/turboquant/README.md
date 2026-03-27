@@ -8,11 +8,14 @@ layers built around three conservative ideas:
 - optional outlier residuals kept in full precision for stability.
 
 The current integration targets `tf.keras.layers.Dense`,
-`tf.keras.layers.Conv1D`, `tf.keras.layers.Conv2D`, and
-`tf.keras.layers.Conv3D` through `TurboDense`, `TurboConv1D`,
-`TurboConv2D`, `TurboConv3D`, and a `quantize_model()` cloning helper. The
-core packing logic is kept in a NumPy-only module so the quantizer is easy to
-test and extend before moving deeper into TensorFlow compiler paths.
+`tf.keras.layers.Conv1D`, `tf.keras.layers.Conv2D`,
+`tf.keras.layers.Conv3D`, `tf.keras.layers.DepthwiseConv2D`,
+`tf.keras.layers.SeparableConv1D`, and `tf.keras.layers.SeparableConv2D`
+through `TurboDense`, `TurboConv1D`, `TurboConv2D`, `TurboConv3D`,
+`TurboDepthwiseConv2D`, `TurboSeparableConv1D`, `TurboSeparableConv2D`, and
+`quantize_model()` cloning helpers. The core packing logic is kept in a
+NumPy-only module so the quantizer is easy to test and extend before moving
+deeper into TensorFlow compiler paths.
 
 ## Example
 
@@ -40,12 +43,13 @@ quantized_model = api.quantize_model(
 - `summarize_model(include_skipped=True)` also reports ignored layers and the
   reason they were left untouched, such as a kernel that is too small or a
   packing layout that is not profitable.
+- Separable convolutions are summarized component-wise so the report keeps both
+  the depthwise and pointwise compression/error profile visible.
 - `export_saved_model()` emits a TensorFlow SavedModel with a stable
   `serving_default` signature for inference, and `load_saved_model()` restores
   the exported inference object through the core SavedModel loader.
 - The tensor packing API is shape-generic, so extending support beyond the
-  current `Dense` and convolution wrappers does not require reworking the
-  quantizer itself.
+  current wrappers does not require reworking the quantizer itself.
 
 ## Benchmark
 
@@ -53,5 +57,5 @@ A minimal reproducible benchmark is available in
 `tensorflow/python/ops/turboquant/benchmark_turboquant.py`. It reports:
 
 - per-layer effective compression,
-- end-to-end output drift on a small Dense stack,
+- end-to-end output drift on a mixed depthwise/separable/Dense stack,
 - average batch latency for the float and TurboQuant models.
