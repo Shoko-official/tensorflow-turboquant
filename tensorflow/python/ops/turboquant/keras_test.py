@@ -1,17 +1,26 @@
 """Tests for TurboQuant Keras integration."""
 
+import os
+
 import numpy as np
 
 from tensorflow.python.eager import def_function
+from tensorflow.python.framework import constant_op
 from tensorflow.python.keras import Sequential
+from tensorflow.python.keras.layers import Conv1D
 from tensorflow.python.keras.layers import Conv2D
+from tensorflow.python.keras.layers import Conv3D
 from tensorflow.python.keras.layers import Dense
 from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
+from tensorflow.python.ops.turboquant.api import export_saved_model
+from tensorflow.python.ops.turboquant.api import load_saved_model
 from tensorflow.python.ops.turboquant.api import quantize_model
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
+from tensorflow.python.ops.turboquant.keras import TurboConv1D
 from tensorflow.python.ops.turboquant.keras import TurboConv2D
+from tensorflow.python.ops.turboquant.keras import TurboConv3D
 from tensorflow.python.ops.turboquant.keras import TurboDense
 from tensorflow.python.platform import test
 
@@ -53,6 +62,37 @@ class TurboKerasIntegrationTest(test.TestCase):
         layer for layer in quantized_model.layers if isinstance(layer, TurboConv2D)
     ]
     self.assertLen(conv_like_layers, 2)
+
+  def test_quantize_model_replaces_conv1d_and_conv3d_layers(self):
+    conv1d_model = Sequential([
+        InputLayer(input_shape=(48, 16)),
+        Conv1D(32, 3, padding='same', activation='relu'),
+        Conv1D(16, 3, padding='same'),
+    ])
+    conv1d_model(np.ones((2, 48, 16), dtype=np.float32))
+    quantized_conv1d = quantize_model(
+        conv1d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+    self.assertLen(
+        [layer for layer in quantized_conv1d.layers if isinstance(layer, TurboConv1D)],
+        2,
+    )
+
+    conv3d_model = Sequential([
+        InputLayer(input_shape=(8, 8, 8, 2)),
+        Conv3D(8, 3, padding='same', activation='relu'),
+        Conv3D(4, 3, padding='same'),
+    ])
+    conv3d_model(np.ones((1, 8, 8, 8, 2), dtype=np.float32))
+    quantized_conv3d = quantize_model(
+        conv3d_model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=5.0),
+    )
+    self.assertLen(
+        [layer for layer in quantized_conv3d.layers if isinstance(layer, TurboConv3D)],
+        2,
+    )
 
   def test_quantized_model_stays_close_to_reference(self):
     rng = np.random.default_rng(13)
@@ -118,6 +158,39 @@ class TurboKerasIntegrationTest(test.TestCase):
     outputs = run(np.ones((3, 64), dtype=np.float32))
     self.assertEqual(outputs.shape.as_list(), [3, 16])
 
+  def test_quantized_conv1d_and_conv3d_models_stay_close_to_reference(self):
+    rng = np.random.default_rng(77)
+
+    inputs_1d = rng.normal(size=(4, 48, 16)).astype(np.float32)
+    model_1d = Sequential([
+        InputLayer(input_shape=(48, 16)),
+        Conv1D(24, 3, padding='same', activation='relu'),
+        Conv1D(16, 3, padding='same'),
+    ])
+    model_1d(inputs_1d)
+    quantized_1d = quantize_model(
+        model_1d,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    self.assertAllClose(
+        model_1d(inputs_1d), quantized_1d(inputs_1d), atol=0.25, rtol=0.25
+    )
+
+    inputs_3d = rng.normal(size=(2, 8, 8, 8, 2)).astype(np.float32)
+    model_3d = Sequential([
+        InputLayer(input_shape=(8, 8, 8, 2)),
+        Conv3D(8, 3, padding='same', activation='relu'),
+        Conv3D(4, 3, padding='same'),
+    ])
+    model_3d(inputs_3d)
+    quantized_3d = quantize_model(
+        model_3d,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+    )
+    self.assertAllClose(
+        model_3d(inputs_3d), quantized_3d(inputs_3d), atol=0.3, rtol=0.3
+    )
+
   def test_summarize_model_reports_dense_layers(self):
     model = Sequential([
         InputLayer(input_shape=(128,)),
@@ -144,6 +217,23 @@ class TurboKerasIntegrationTest(test.TestCase):
     self.assertLen(summaries, 2)
     self.assertTrue(all(summary['layer_type'] == 'Conv2D' for summary in summaries))
 
+  def test_summarize_model_can_include_skipped_layers_with_reasons(self):
+    model = Sequential([
+        InputLayer(input_shape=(8,)),
+        Dense(4),
+    ])
+    model(np.ones((1, 8), dtype=np.float32))
+
+    summaries = summarize_model(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, minimum_elements=64),
+        include_skipped=True,
+    )
+
+    self.assertLen(summaries, 1)
+    self.assertEqual(summaries[0]['status'], 'skipped')
+    self.assertEqual(summaries[0]['reason'], 'below_minimum_elements')
+
   def test_small_layers_are_left_unmodified_when_not_profitable(self):
     model = Sequential([
         InputLayer(input_shape=(8,)),
@@ -157,6 +247,35 @@ class TurboKerasIntegrationTest(test.TestCase):
     )
 
     self.assertIsInstance(quantized_model.layers[-1], Dense)
+
+  def test_export_saved_model_round_trip_preserves_turbo_layers(self):
+    rng = np.random.default_rng(5)
+    inputs = rng.normal(size=(4, 16, 16, 3)).astype(np.float32)
+
+    model = Sequential([
+        InputLayer(input_shape=(16, 16, 3)),
+        Conv2D(12, 3, padding='same', activation='relu'),
+        Flatten(),
+        Dense(6),
+    ])
+    model(inputs)
+
+    export_dir = os.path.join(self.get_temp_dir(), 'turboquant_saved_model')
+    quantized_model = export_saved_model(
+        model,
+        export_dir,
+        TurboQuantConfig(num_bits=4, group_size=16, outlier_threshold=6.0),
+    )
+    loaded_model = load_saved_model(export_dir)
+    loaded_outputs = loaded_model.signatures['serving_default'](
+        constant_op.constant(inputs)
+    )['outputs']
+
+    self.assertTrue(any(isinstance(layer, TurboConv2D) for layer in quantized_model.layers))
+    self.assertTrue(any(isinstance(layer, TurboDense) for layer in quantized_model.layers))
+    self.assertAllClose(
+        quantized_model(inputs), loaded_outputs, atol=1e-5, rtol=1e-5
+    )
 
 
 if __name__ == '__main__':

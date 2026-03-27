@@ -1,4 +1,4 @@
-"""Minimal benchmark for TurboQuant Conv2D and Dense models."""
+"""Minimal benchmark for TurboQuant convolution and Dense models."""
 
 import time
 

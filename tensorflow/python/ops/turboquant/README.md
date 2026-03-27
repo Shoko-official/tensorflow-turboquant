@@ -7,11 +7,12 @@ layers built around three conservative ideas:
 - block-wise scales to preserve local dynamic range,
 - optional outlier residuals kept in full precision for stability.
 
-The current integration targets `tf.keras.layers.Dense` and
-`tf.keras.layers.Conv2D` through `TurboDense`, `TurboConv2D`, and a
-`quantize_model()` cloning helper. The core packing logic is kept in a
-NumPy-only module so the quantizer is easy to test and extend before moving
-deeper into TensorFlow compiler paths.
+The current integration targets `tf.keras.layers.Dense`,
+`tf.keras.layers.Conv1D`, `tf.keras.layers.Conv2D`, and
+`tf.keras.layers.Conv3D` through `TurboDense`, `TurboConv1D`,
+`TurboConv2D`, `TurboConv3D`, and a `quantize_model()` cloning helper. The
+core packing logic is kept in a NumPy-only module so the quantizer is easy to
+test and extend before moving deeper into TensorFlow compiler paths.
 
 ## Example
 
@@ -36,8 +37,14 @@ quantized_model = api.quantize_model(
   Python-layer behavior and error profile are covered by tests.
 - Compression numbers reported by `summarize_encoding()` and `summarize_model()`
   estimate the effective packed footprint. They are not raw checkpoint sizes.
+- `summarize_model(include_skipped=True)` also reports ignored layers and the
+  reason they were left untouched, such as a kernel that is too small or a
+  packing layout that is not profitable.
+- `export_saved_model()` emits a TensorFlow SavedModel with a stable
+  `serving_default` signature for inference, and `load_saved_model()` restores
+  the exported inference object through the core SavedModel loader.
 - The tensor packing API is shape-generic, so extending support beyond the
-  current `Dense` and `Conv2D` wrappers does not require reworking the
+  current `Dense` and convolution wrappers does not require reworking the
   quantizer itself.
 
 ## Benchmark
