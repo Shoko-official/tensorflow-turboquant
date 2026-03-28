@@ -40,7 +40,8 @@ The initial scope is a weight-only, block-wise codebook quantizer for Keras
 - per-output-channel codebooks,
 - per-block scales,
 - optional full-precision residuals for outliers,
-- model cloning utilities, calibration helpers, and compression/error summaries.
+- model cloning utilities, calibration helpers, activation-aware skip
+  heuristics, and compression/error summaries.
 
 The design is intentionally conservative: it adds a testable Python-level
 integration first, without coupling the first release of TurboQuant to deeper

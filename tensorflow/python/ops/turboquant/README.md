@@ -39,6 +39,18 @@ calibration_stats = api.collect_calibration_stats(
     representative_dataset,
     config.CalibrationConfig(max_steps=16, max_samples=2048),
 )
+
+quantized_model = api.quantize_model(
+    model,
+    config.TurboQuantConfig(
+        num_bits=4,
+        group_size=64,
+        max_normalized_mean_squared_error=0.05,
+        max_normalized_max_abs_error=0.25,
+    ),
+    representative_dataset=representative_dataset,
+    calibration_config=config.CalibrationConfig(max_steps=16, max_samples=2048),
+)
 ```
 
 ## Design Notes
@@ -56,6 +68,10 @@ calibration_stats = api.collect_calibration_stats(
 - `collect_calibration_stats()` gathers per-layer activation statistics from a
   representative dataset, and `summarize_model(..., calibration_stats=...)`
   adds normalized error metrics against observed activation scales.
+- `quantize_model(..., representative_dataset=..., calibration_config=...)`
+  can apply optional activation-aware skip heuristics when
+  `max_normalized_mean_squared_error` or `max_normalized_max_abs_error` are set
+  in `TurboQuantConfig`.
 - `export_saved_model()` emits a TensorFlow SavedModel with a stable
   `serving_default` signature for inference, and `load_saved_model()` restores
   the exported inference object through the core SavedModel loader.
