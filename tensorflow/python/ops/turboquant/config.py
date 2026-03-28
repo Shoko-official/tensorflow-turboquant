@@ -15,6 +15,8 @@ class TurboQuantConfig:
   max_iterations: int = 25
   convergence_tolerance: float = 1e-4
   minimum_elements: int = 256
+  max_normalized_mean_squared_error: float | None = None
+  max_normalized_max_abs_error: float | None = None
 
   def __post_init__(self):
     if self.num_bits < 1 or self.num_bits > 8:
@@ -45,6 +47,22 @@ class TurboQuantConfig:
           '`minimum_elements` must be a positive integer. '
           f'Got: {self.minimum_elements}.'
       )
+    if (
+        self.max_normalized_mean_squared_error is not None
+        and self.max_normalized_mean_squared_error <= 0
+    ):
+      raise ValueError(
+          '`max_normalized_mean_squared_error` must be strictly positive '
+          f'when set. Got: {self.max_normalized_mean_squared_error}.'
+      )
+    if (
+        self.max_normalized_max_abs_error is not None
+        and self.max_normalized_max_abs_error <= 0
+    ):
+      raise ValueError(
+          '`max_normalized_max_abs_error` must be strictly positive when '
+          f'set. Got: {self.max_normalized_max_abs_error}.'
+      )
 
   @property
   def levels(self) -> int:
@@ -60,6 +78,13 @@ class TurboQuantConfig:
 
   def should_quantize(self, num_elements: int) -> bool:
     return num_elements >= self.minimum_elements
+
+  @property
+  def uses_activation_guidance(self) -> bool:
+    return (
+        self.max_normalized_mean_squared_error is not None
+        or self.max_normalized_max_abs_error is not None
+    )
 
   def to_dict(self) -> dict[str, object]:
     return asdict(self)

@@ -9,6 +9,7 @@ from tensorflow.python.keras.layers import convolutional as convolutional_layers
 from tensorflow.python.keras.layers import core as core_layers
 from tensorflow.python.keras.layers import embeddings as embeddings_layers
 from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
+from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
@@ -236,15 +237,66 @@ def _merge_calibration_stats(summary, calibration_stats):
   return summary
 
 
-def _should_quantize_layer(layer, quantization_config: TurboQuantConfig) -> bool:
+def _apply_activation_guidance(summary, quantization_config: TurboQuantConfig):
+  if summary.get('status') != 'quantized':
+    return summary
+  if not quantization_config.uses_activation_guidance:
+    return summary
+  if 'normalized_mean_squared_error' not in summary:
+    return summary
+
+  if (
+      quantization_config.max_normalized_mean_squared_error is not None
+      and summary['normalized_mean_squared_error']
+      > quantization_config.max_normalized_mean_squared_error
+  ):
+    summary['status'] = 'skipped'
+    summary['reason'] = 'normalized_mean_squared_error_too_high'
+    return summary
+
+  if (
+      quantization_config.max_normalized_max_abs_error is not None
+      and summary['normalized_max_abs_error']
+      > quantization_config.max_normalized_max_abs_error
+  ):
+    summary['status'] = 'skipped'
+    summary['reason'] = 'normalized_max_abs_error_too_high'
+    return summary
+  return summary
+
+
+def _resolve_calibration_stats(model,
+                               quantization_config: TurboQuantConfig,
+                               calibration_stats=None,
+                               representative_dataset=None,
+                               calibration_config=None):
+  if calibration_stats is not None:
+    return calibration_stats
+  if representative_dataset is None:
+    return None
+  calibration_config = CalibrationConfig.from_dict(calibration_config)
+  return collect_calibration_stats(
+      model, representative_dataset, calibration_config
+  )
+
+
+def _should_quantize_layer(layer,
+                           quantization_config: TurboQuantConfig,
+                           calibration_stats=None) -> bool:
   return (
-      _layer_quantization_summary(layer, quantization_config)['status']
+      _apply_activation_guidance(
+          _merge_calibration_stats(
+              _layer_quantization_summary(layer, quantization_config),
+              calibration_stats,
+          ),
+          quantization_config,
+      )['status']
       == 'quantized'
   )
 
 
-def _clone_layer(layer, quantization_config: TurboQuantConfig):
-  if not _should_quantize_layer(layer, quantization_config):
+def _clone_layer(layer, quantization_config: TurboQuantConfig, calibration_stats=None):
+  if not _should_quantize_layer(layer, quantization_config, calibration_stats):
     return layer.__class__.from_config(layer.get_config())
 
   layer_config = layer.get_config()
@@ -271,7 +323,11 @@ def _clone_layer(layer, quantization_config: TurboQuantConfig):
   return layer.__class__.from_config(layer.get_config())
 
 
-def quantize_model(model, quantization_config=None):
+def quantize_model(model,
+                   quantization_config=None,
+                   calibration_stats=None,
+                   representative_dataset=None,
+                   calibration_config=None):
   """Clones a Functional or Sequential model with TurboQuant wrappers."""
   quantization_config = TurboQuantConfig.from_dict(quantization_config)
   if not hasattr(model, 'layers') or not hasattr(model, 'get_layer'):
@@ -281,10 +337,19 @@ def quantize_model(model, quantization_config=None):
     )
   if not model.built:
     raise ValueError('`quantize_model` expects a built model.')
+  calibration_stats = _resolve_calibration_stats(
+      model,
+      quantization_config,
+      calibration_stats=calibration_stats,
+      representative_dataset=representative_dataset,
+      calibration_config=calibration_config,
+  )
 
   quantized_model = models.clone_model(
       model,
-      clone_function=lambda layer: _clone_layer(layer, quantization_config))
+      clone_function=lambda layer: _clone_layer(
+          layer, quantization_config, calibration_stats
+      ))
   if not quantized_model.built:
     quantized_model.build(model.input_shape)
 
@@ -316,13 +381,23 @@ def quantize_model(model, quantization_config=None):
 def summarize_model(model,
                     quantization_config=None,
                     include_skipped=False,
-                    calibration_stats=None):
+                    calibration_stats=None,
+                    representative_dataset=None,
+                    calibration_config=None):
   """Collects per-layer TurboQuant summaries for supported kernels."""
   quantization_config = TurboQuantConfig.from_dict(quantization_config)
+  calibration_stats = _resolve_calibration_stats(
+      model,
+      quantization_config,
+      calibration_stats=calibration_stats,
+      representative_dataset=representative_dataset,
+      calibration_config=calibration_config,
+  )
   summaries = []
   for layer in model.layers:
     summary = _layer_quantization_summary(layer, quantization_config)
     summary = _merge_calibration_stats(summary, calibration_stats)
+    summary = _apply_activation_guidance(summary, quantization_config)
     if summary['status'] != 'quantized' and not include_skipped:
       continue
     summaries.append(summary)
@@ -332,6 +407,9 @@ def summarize_model(model,
 def export_saved_model(model,
                        export_dir,
                        quantization_config=None,
+                       calibration_stats=None,
+                       representative_dataset=None,
+                       calibration_config=None,
                        signatures=None,
                        options=None,
                        signature_key='serving_default'):
@@ -339,7 +417,13 @@ def export_saved_model(model,
   quantized_model = (
       model
       if _is_quantized_model(model)
-      else quantize_model(model, quantization_config)
+      else quantize_model(
+          model,
+          quantization_config,
+          calibration_stats=calibration_stats,
+          representative_dataset=representative_dataset,
+          calibration_config=calibration_config,
+      )
   )
 
   if signatures is None:
