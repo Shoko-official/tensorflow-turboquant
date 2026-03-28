@@ -509,6 +509,7 @@ class TurboKerasIntegrationTest(test.TestCase):
     )
     self.assertIn('model', report)
     self.assertIn('summaries', report)
+    self.assertIn('aggregate', report)
     self.assertTrue(
       any(
           isinstance(layer, TurboDense)
@@ -516,6 +517,90 @@ class TurboKerasIntegrationTest(test.TestCase):
       )
     )
     self.assertTrue(any('decision_trace' in item for item in report['summaries']))
+
+  def test_quantize_model_is_idempotent_with_turbo_layers(self):
+    model = Sequential([
+        InputLayer(input_shape=(32,)),
+        Dense(16, activation='relu'),
+        Dense(8),
+    ])
+    inputs = np.ones((2, 32), dtype=np.float32)
+    model(inputs)
+
+    config = TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0)
+    quantized_once = quantize_model(model, config)
+    quantized_twice = quantize_model(quantized_once, config)
+
+    self.assertTrue(
+        all(isinstance(layer, TurboDense) for layer in quantized_twice.layers)
+    )
+    self.assertAllClose(
+        quantized_once(inputs), quantized_twice(inputs), atol=1e-5, rtol=1e-5
+    )
+
+  def test_layer_name_filters_scope_recommend_summarize_and_quantize(self):
+    model = Sequential([
+        InputLayer(input_shape=(32,)),
+        Dense(16, activation='relu', name='dense_a'),
+        Dense(8, name='dense_b'),
+    ])
+    model(np.ones((1, 32), dtype=np.float32))
+    config = TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0)
+
+    recommendations = recommend_layer_configs(
+        model,
+        config,
+        target_layer_names=['dense_b'],
+        include_skipped=True,
+    )
+    by_name = {item['layer_name']: item for item in recommendations}
+    self.assertEqual(by_name['dense_a']['status'], 'skipped')
+    self.assertEqual(by_name['dense_a']['reason'], 'not_selected_by_filter')
+    self.assertEqual(by_name['dense_b']['status'], 'quantized')
+
+    summary_report = summarize_model(
+        model,
+        config,
+        include_skipped=True,
+        target_layer_names=['dense_a', 'dense_b'],
+        exclude_layer_names=['dense_a'],
+        return_report=True,
+    )
+    self.assertIn('aggregate', summary_report)
+    self.assertLen(summary_report['summaries'], 2)
+    summary_by_name = {
+        item['layer_name']: item for item in summary_report['summaries']
+    }
+    self.assertEqual(summary_by_name['dense_a']['status'], 'skipped')
+    self.assertEqual(
+        summary_by_name['dense_a']['reason'], 'not_selected_by_filter'
+    )
+
+    quantized_model = quantize_model(
+        model,
+        config,
+        target_layer_names=['dense_b'],
+    )
+    dense_a = quantized_model.get_layer('dense_a')
+    dense_b = quantized_model.get_layer('dense_b')
+    self.assertIsInstance(dense_a, Dense)
+    self.assertIsInstance(dense_b, TurboDense)
+
+  def test_layer_name_filters_reject_overlap(self):
+    model = Sequential([
+        InputLayer(input_shape=(16,)),
+        Dense(8, name='dense_a'),
+    ])
+    model(np.ones((1, 16), dtype=np.float32))
+
+    with self.assertRaisesRegex(ValueError, 'both targeted and excluded'):
+      summarize_model(
+          model,
+          TurboQuantConfig(group_size=8),
+          include_skipped=True,
+          target_layer_names=['dense_a'],
+          exclude_layer_names=['dense_a'],
+      )
 
   def test_summarize_model_reports_dense_layers(self):
     model = Sequential([

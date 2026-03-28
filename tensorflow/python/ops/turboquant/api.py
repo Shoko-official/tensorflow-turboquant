@@ -77,6 +77,42 @@ def get_custom_objects():
   }
 
 
+def _normalize_layer_name_set(layer_names):
+  if layer_names is None:
+    return None
+  return {str(layer_name) for layer_name in layer_names}
+
+
+def _validate_layer_name_selection(model,
+                                   target_layer_names=None,
+                                   exclude_layer_names=None):
+  available = {layer.name for layer in model.layers}
+  missing = set()
+  for names in (target_layer_names, exclude_layer_names):
+    if names is None:
+      continue
+    missing.update(set(names) - available)
+  if missing:
+    raise ValueError(
+        'Unknown layer names in selection: ' + ', '.join(sorted(missing))
+    )
+  if target_layer_names is not None and exclude_layer_names is not None:
+    overlap = set(target_layer_names).intersection(set(exclude_layer_names))
+    if overlap:
+      raise ValueError(
+          'Layer names cannot be both targeted and excluded: '
+          + ', '.join(sorted(overlap))
+      )
+
+
+def _is_layer_selected(layer_name, target_layer_names, exclude_layer_names):
+  if target_layer_names is not None and layer_name not in target_layer_names:
+    return False
+  if exclude_layer_names is not None and layer_name in exclude_layer_names:
+    return False
+  return True
+
+
 def _is_quantized_model(model) -> bool:
   return any(isinstance(layer, _QUANTIZED_LAYER_TYPES) for layer in model.layers)
 
@@ -441,6 +477,8 @@ def recommend_layer_configs(
     candidate_num_bits=None,
     candidate_group_sizes=None,
     candidate_outlier_thresholds=None,
+    target_layer_names=None,
+    exclude_layer_names=None,
     include_skipped=True,
 ):
   """Searches a per-layer quantization configuration under optional targets."""
@@ -464,9 +502,26 @@ def recommend_layer_configs(
   bits_candidates = tuple(sorted(set(int(v) for v in bits_candidates)))
   group_candidates = tuple(sorted(set(int(v) for v in group_candidates)))
   outlier_candidates = tuple(sorted(set(float(v) for v in outlier_candidates)))
+  target_layer_names = _normalize_layer_name_set(target_layer_names)
+  exclude_layer_names = _normalize_layer_name_set(exclude_layer_names)
+  _validate_layer_name_selection(
+      model,
+      target_layer_names=target_layer_names,
+      exclude_layer_names=exclude_layer_names,
+  )
 
   recommendations = []
   for layer in model.layers:
+    if not _is_layer_selected(
+        layer.name, target_layer_names, exclude_layer_names
+    ):
+      if include_skipped:
+        summary = _layer_quantization_summary(layer, base_config)
+        summary['status'] = 'skipped'
+        _set_final_reason(summary, 'not_selected_by_filter')
+        recommendations.append(summary)
+      continue
+
     base_summary = _layer_quantization_summary(layer, base_config)
     if 'kernel_count' not in base_summary:
       if include_skipped:
@@ -580,6 +635,69 @@ def _validate_strict_quantization(summaries, target_layer_names=None):
     )
 
 
+def _aggregate_summaries(summaries):
+  aggregate = {
+      'total_layers': int(len(summaries)),
+      'supported_layers': 0,
+      'quantized_layers': 0,
+      'skipped_layers': 0,
+      'total_original_bytes': 0.0,
+      'total_packed_bytes': 0.0,
+      'effective_compression_ratio': 0.0,
+      'mean_squared_error': 0.0,
+      'max_abs_error': 0.0,
+      'outlier_fraction': 0.0,
+      'skipped_reasons': {},
+      'quantized_layer_names': [],
+      'skipped_layer_names': [],
+  }
+
+  total_elements = 0
+  weighted_squared_error = 0.0
+  weighted_outliers = 0.0
+  for summary in summaries:
+    if 'kernel_count' not in summary:
+      continue
+    aggregate['supported_layers'] += 1
+    if summary.get('status') == 'quantized':
+      aggregate['quantized_layers'] += 1
+      aggregate['quantized_layer_names'].append(summary['layer_name'])
+      aggregate['total_original_bytes'] += float(summary.get('original_bytes', 0.0))
+      aggregate['total_packed_bytes'] += float(summary.get('packed_bytes', 0.0))
+      num_elements = int(summary.get('num_elements', 0))
+      total_elements += num_elements
+      weighted_squared_error += (
+          float(summary.get('mean_squared_error', 0.0)) * float(num_elements)
+      )
+      weighted_outliers += (
+          float(summary.get('outlier_fraction', 0.0)) * float(num_elements)
+      )
+      aggregate['max_abs_error'] = max(
+          aggregate['max_abs_error'], float(summary.get('max_abs_error', 0.0))
+      )
+    else:
+      aggregate['skipped_layers'] += 1
+      aggregate['skipped_layer_names'].append(summary['layer_name'])
+      reason = summary.get('reason', 'unknown')
+      aggregate['skipped_reasons'][reason] = (
+          int(aggregate['skipped_reasons'].get(reason, 0)) + 1
+      )
+
+  if aggregate['total_packed_bytes'] > 0:
+    aggregate['effective_compression_ratio'] = (
+        float(aggregate['total_original_bytes'])
+        / float(aggregate['total_packed_bytes'])
+    )
+  if total_elements > 0:
+    aggregate['mean_squared_error'] = (
+        float(weighted_squared_error) / float(total_elements)
+    )
+    aggregate['outlier_fraction'] = (
+        float(weighted_outliers) / float(total_elements)
+    )
+  return aggregate
+
+
 def _collect_layer_summaries(model,
                              base_config: TurboQuantConfig,
                              calibration_stats,
@@ -590,7 +708,9 @@ def _collect_layer_summaries(model,
                              target_compression_ratio=None,
                              candidate_num_bits=None,
                              candidate_group_sizes=None,
-                             candidate_outlier_thresholds=None):
+                             candidate_outlier_thresholds=None,
+                             target_layer_names=None,
+                             exclude_layer_names=None):
   layer_overrides = _normalize_layer_overrides(layer_quantization_overrides)
   auto_recommendations = None
   auto_overrides = {}
@@ -606,6 +726,8 @@ def _collect_layer_summaries(model,
         candidate_num_bits=candidate_num_bits,
         candidate_group_sizes=candidate_group_sizes,
         candidate_outlier_thresholds=candidate_outlier_thresholds,
+        target_layer_names=target_layer_names,
+        exclude_layer_names=exclude_layer_names,
         include_skipped=True,
     )
     for recommendation in auto_recommendations:
@@ -626,6 +748,15 @@ def _collect_layer_summaries(model,
 
   summaries = []
   for layer in model.layers:
+    if not _is_layer_selected(
+        layer.name, target_layer_names, exclude_layer_names
+    ):
+      summary = _layer_quantization_summary(layer, base_config)
+      summary['status'] = 'skipped'
+      _set_final_reason(summary, 'not_selected_by_filter')
+      summaries.append(summary)
+      continue
+
     if layer.name in auto_skip_layers:
       summary = dict(recommendation_by_name[layer.name])
     else:
@@ -668,6 +799,7 @@ def quantize_model(model,
                    dry_run=False,
                    strict=False,
                    target_layer_names=None,
+                   exclude_layer_names=None,
                    return_report=False):
   """Clones a Functional or Sequential model with TurboQuant wrappers."""
   base_config = TurboQuantConfig.from_dict(quantization_config)
@@ -678,6 +810,13 @@ def quantize_model(model,
     )
   if not model.built:
     raise ValueError('`quantize_model` expects a built model.')
+  target_layer_names = _normalize_layer_name_set(target_layer_names)
+  exclude_layer_names = _normalize_layer_name_set(exclude_layer_names)
+  _validate_layer_name_selection(
+      model,
+      target_layer_names=target_layer_names,
+      exclude_layer_names=exclude_layer_names,
+  )
 
   calibration_stats = _resolve_calibration_stats(
       model,
@@ -698,11 +837,25 @@ def quantize_model(model,
       candidate_num_bits=candidate_num_bits,
       candidate_group_sizes=candidate_group_sizes,
       candidate_outlier_thresholds=candidate_outlier_thresholds,
+      target_layer_names=target_layer_names,
+      exclude_layer_names=exclude_layer_names,
   )
 
   if strict:
-    _validate_strict_quantization(summaries, target_layer_names)
+    strict_target_layer_names = target_layer_names
+    if strict_target_layer_names is None and exclude_layer_names is not None:
+      strict_target_layer_names = [
+          layer.name
+          for layer in model.layers
+          if layer.name not in exclude_layer_names
+      ]
+    _validate_strict_quantization(summaries, strict_target_layer_names)
   if dry_run:
+    if return_report:
+      return {
+          'summaries': summaries,
+          'aggregate': _aggregate_summaries(summaries),
+      }
     return summaries
 
   quantized_layer_configs = {}
@@ -740,6 +893,16 @@ def quantize_model(model,
   )
   for layer in model.layers:
     cloned_layer = quantized_model.get_layer(layer.name)
+    if (
+        isinstance(layer, _QUANTIZED_LAYER_TYPES)
+        and isinstance(cloned_layer, _QUANTIZED_LAYER_TYPES)
+        and layer.__class__ == cloned_layer.__class__
+    ):
+      source_weights = layer.get_weights()
+      if source_weights:
+        cloned_layer.set_weights(source_weights)
+      continue
+
     if isinstance(cloned_layer, TurboEmbedding):
       cloned_layer.quantize_from_embedding(layer)
     elif isinstance(cloned_layer, TurboDense):
@@ -755,6 +918,7 @@ def quantize_model(model,
     return {
         'model': quantized_model,
         'summaries': summaries,
+        'aggregate': _aggregate_summaries(summaries),
     }
   return quantized_model
 
@@ -772,9 +936,19 @@ def summarize_model(model,
                     target_compression_ratio=None,
                     candidate_num_bits=None,
                     candidate_group_sizes=None,
-                    candidate_outlier_thresholds=None):
+                    candidate_outlier_thresholds=None,
+                    target_layer_names=None,
+                    exclude_layer_names=None,
+                    return_report=False):
   """Collects per-layer TurboQuant summaries for supported kernels."""
   base_config = TurboQuantConfig.from_dict(quantization_config)
+  target_layer_names = _normalize_layer_name_set(target_layer_names)
+  exclude_layer_names = _normalize_layer_name_set(exclude_layer_names)
+  _validate_layer_name_selection(
+      model,
+      target_layer_names=target_layer_names,
+      exclude_layer_names=exclude_layer_names,
+  )
   calibration_stats = _resolve_calibration_stats(
       model,
       base_config,
@@ -794,10 +968,20 @@ def summarize_model(model,
       candidate_num_bits=candidate_num_bits,
       candidate_group_sizes=candidate_group_sizes,
       candidate_outlier_thresholds=candidate_outlier_thresholds,
+      target_layer_names=target_layer_names,
+      exclude_layer_names=exclude_layer_names,
   )
-  if include_skipped:
-    return summaries
-  return [summary for summary in summaries if summary['status'] == 'quantized']
+  filtered = summaries
+  if not include_skipped:
+    filtered = [
+        summary for summary in summaries if summary['status'] == 'quantized'
+    ]
+  if return_report:
+    return {
+        'summaries': filtered,
+        'aggregate': _aggregate_summaries(summaries),
+    }
+  return filtered
 
 
 def export_saved_model(model,
@@ -816,6 +1000,7 @@ def export_saved_model(model,
                        candidate_outlier_thresholds=None,
                        strict=False,
                        target_layer_names=None,
+                       exclude_layer_names=None,
                        signatures=None,
                        options=None,
                        signature_key='serving_default'):
@@ -841,6 +1026,7 @@ def export_saved_model(model,
           candidate_outlier_thresholds=candidate_outlier_thresholds,
           strict=strict,
           target_layer_names=target_layer_names,
+          exclude_layer_names=exclude_layer_names,
       )
   )
 
