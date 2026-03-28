@@ -10,10 +10,12 @@ layers built around three conservative ideas:
 The current integration targets `tf.keras.layers.Dense`,
 `tf.keras.layers.Conv1D`, `tf.keras.layers.Conv2D`,
 `tf.keras.layers.Conv3D`, `tf.keras.layers.DepthwiseConv2D`,
-`tf.keras.layers.SeparableConv1D`, and `tf.keras.layers.SeparableConv2D`
+`tf.keras.layers.SeparableConv1D`, `tf.keras.layers.SeparableConv2D`, and
+`tf.keras.layers.Embedding`
 through `TurboDense`, `TurboConv1D`, `TurboConv2D`, `TurboConv3D`,
-`TurboDepthwiseConv2D`, `TurboSeparableConv1D`, `TurboSeparableConv2D`, and
-`quantize_model()` cloning helpers. The core packing logic is kept in a
+`TurboDepthwiseConv2D`, `TurboSeparableConv1D`, `TurboSeparableConv2D`,
+`TurboEmbedding`, and `quantize_model()` cloning helpers. The core packing
+logic is kept in a
 NumPy-only module so the quantizer is easy to test and extend before moving
 deeper into TensorFlow compiler paths.
 
@@ -31,6 +33,12 @@ quantized_model = api.quantize_model(
         outlier_threshold=6.0,
     ),
 )
+
+calibration_stats = api.collect_calibration_stats(
+    model,
+    representative_dataset,
+    config.CalibrationConfig(max_steps=16, max_samples=2048),
+)
 ```
 
 ## Design Notes
@@ -45,6 +53,9 @@ quantized_model = api.quantize_model(
   packing layout that is not profitable.
 - Separable convolutions are summarized component-wise so the report keeps both
   the depthwise and pointwise compression/error profile visible.
+- `collect_calibration_stats()` gathers per-layer activation statistics from a
+  representative dataset, and `summarize_model(..., calibration_stats=...)`
+  adds normalized error metrics against observed activation scales.
 - `export_saved_model()` emits a TensorFlow SavedModel with a stable
   `serving_default` signature for inference, and `load_saved_model()` restores
   the exported inference object through the core SavedModel loader.
