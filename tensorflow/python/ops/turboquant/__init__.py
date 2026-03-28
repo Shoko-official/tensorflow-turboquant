@@ -4,6 +4,7 @@ from tensorflow.python.ops.turboquant.api import export_saved_model
 from tensorflow.python.ops.turboquant.api import get_custom_objects
 from tensorflow.python.ops.turboquant.api import load_saved_model
 from tensorflow.python.ops.turboquant.api import quantize_model
+from tensorflow.python.ops.turboquant.api import recommend_layer_configs
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
@@ -14,8 +15,11 @@ from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
 from tensorflow.python.ops.turboquant.core import quantize_tensor
 from tensorflow.python.ops.turboquant.core import summarize_encoding
 from tensorflow.python.ops.turboquant.keras import TurboConv1D
+from tensorflow.python.ops.turboquant.keras import TurboConv1DTranspose
 from tensorflow.python.ops.turboquant.keras import TurboConv2D
+from tensorflow.python.ops.turboquant.keras import TurboConv2DTranspose
 from tensorflow.python.ops.turboquant.keras import TurboConv3D
+from tensorflow.python.ops.turboquant.keras import TurboConv3DTranspose
 from tensorflow.python.ops.turboquant.keras import TurboDense
 from tensorflow.python.ops.turboquant.keras import TurboDepthwiseConv2D
 from tensorflow.python.ops.turboquant.keras import TurboEmbedding
@@ -25,8 +29,11 @@ from tensorflow.python.ops.turboquant.keras import TurboSeparableConv2D
 __all__ = [
     'CalibrationConfig',
     'TurboConv1D',
+    'TurboConv1DTranspose',
     'TurboConv2D',
+    'TurboConv2DTranspose',
     'TurboConv3D',
+    'TurboConv3DTranspose',
     'TurboDense',
     'TurboDepthwiseConv2D',
     'TurboEmbedding',
@@ -42,6 +49,7 @@ __all__ = [
     'load_saved_model',
     'quantize_model',
     'quantize_tensor',
+    'recommend_layer_configs',
     'summarize_encoding',
     'summarize_model',
 ]

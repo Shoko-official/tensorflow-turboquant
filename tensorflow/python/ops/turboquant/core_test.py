@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
+from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
 from tensorflow.python.ops.turboquant.core import original_bytes
@@ -65,6 +66,12 @@ class TurboQuantCoreTest(unittest.TestCase):
     self.assertIn('compression_ratio', summary)
     self.assertIn('mean_squared_error', summary)
     self.assertGreater(summary['compression_ratio'], 1.0)
+
+  def test_config_from_dict_rejects_unknown_keys(self):
+    with self.assertRaisesRegex(ValueError, 'Unknown `TurboQuantConfig` keys'):
+      TurboQuantConfig.from_dict({'group_size': 8, 'unknown_key': 1})
+    with self.assertRaisesRegex(ValueError, 'Unknown `CalibrationConfig` keys'):
+      CalibrationConfig.from_dict({'max_steps': 8, 'bad': 1})
 
 
 if __name__ == '__main__':

@@ -60,6 +60,7 @@ py_library(
         "//tensorflow/python/keras/utils:generic_utils",
         "//tensorflow/python/keras/utils:engine_utils",
         "//tensorflow/python/ops:array_ops",
+        "//tensorflow/python/ops:array_ops_stack",
         "//tensorflow/python/ops:embedding_ops",
         "//tensorflow/python/ops:nn",
         "//tensorflow/python/ops:math_ops",

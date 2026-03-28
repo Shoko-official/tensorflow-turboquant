@@ -17,6 +17,7 @@ from tensorflow.python.keras.layers import embeddings as embeddings_layers
 from tensorflow.python.keras.utils import conv_utils
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import array_ops_stack
 from tensorflow.python.ops import embedding_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn
@@ -214,6 +215,44 @@ def _build_conv_state(layer, input_shape):
   layer.built = True
 
 
+def _build_conv_transpose_state(layer, input_shape):
+  """Initializes shared TurboQuant transposed convolution state."""
+  input_shape = tensor_shape.TensorShape(input_shape)
+  expected_rank = layer.rank + 2
+  if len(input_shape) != expected_rank:
+    raise ValueError(
+        f'Inputs should have rank {expected_rank}. Received input shape: '
+        f'{input_shape}.'
+    )
+  channel_axis = layer._get_channel_axis()
+  input_dim = tensor_shape.dimension_value(input_shape[channel_axis])
+  if input_dim is None:
+    raise ValueError(
+        'The channel dimension of the inputs should be defined. '
+        'Found `None`.'
+    )
+  input_dim = int(input_dim)
+  layer._kernel_shape = layer.kernel_size + (layer.filters, input_dim)
+  _build_packed_kernel_weights(
+      layer,
+      output_channels=input_dim,
+      row_count=_kernel_row_count(layer._kernel_shape),
+  )
+  if layer.use_bias:
+    layer.bias = layer.add_weight(
+        name='bias',
+        shape=(layer.filters,),
+        initializer=layer.bias_initializer,
+        regularizer=layer.bias_regularizer,
+        constraint=layer.bias_constraint,
+        trainable=False,
+        dtype=layer.dtype)
+  else:
+    layer.bias = None
+  layer.input_spec = InputSpec(ndim=expected_rank, axes={channel_axis: input_dim})
+  layer.built = True
+
+
 def _build_embedding_state(layer):
   """Initializes shared TurboQuant embedding state."""
   _build_packed_kernel_weights(
@@ -405,6 +444,197 @@ def _call_quantized_conv(layer, inputs):
 
   if not context.executing_eagerly():
     outputs.set_shape(layer.compute_output_shape(inputs.shape))
+
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_conv1d_transpose(layer, inputs):
+  inputs_shape = array_ops.shape(inputs)
+  batch_size = inputs_shape[0]
+  if layer.data_format == 'channels_first':
+    t_axis = 2
+  else:
+    t_axis = 1
+
+  length = inputs_shape[t_axis]
+  if layer.output_padding is None:
+    output_padding = None
+  else:
+    output_padding = layer.output_padding[0]
+
+  out_length = conv_utils.deconv_output_length(
+      length,
+      layer.kernel_size[0],
+      padding=layer.padding,
+      output_padding=output_padding,
+      stride=layer.strides[0],
+      dilation=layer.dilation_rate[0],
+  )
+  if layer.data_format == 'channels_first':
+    output_shape = (batch_size, layer.filters, out_length)
+  else:
+    output_shape = (batch_size, out_length, layer.filters)
+  data_format = conv_utils.convert_data_format(layer.data_format, ndim=3)
+
+  output_shape_tensor = array_ops_stack.stack(output_shape)
+  outputs = nn_ops.conv1d_transpose(
+      inputs,
+      layer.dequantized_kernel(),
+      output_shape_tensor,
+      strides=layer.strides,
+      padding=layer.padding.upper(),
+      data_format=data_format,
+      dilations=layer.dilation_rate,
+  )
+
+  if not context.executing_eagerly():
+    outputs.set_shape(layer.compute_output_shape(inputs.shape))
+
+  if layer.use_bias:
+    outputs = nn.bias_add(outputs, layer.bias, data_format=data_format)
+
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_conv2d_transpose(layer, inputs):
+  inputs_shape = array_ops.shape(inputs)
+  batch_size = inputs_shape[0]
+  if layer.data_format == 'channels_first':
+    h_axis, w_axis = 2, 3
+  else:
+    h_axis, w_axis = 1, 2
+
+  height, width = None, None
+  if inputs.shape.rank is not None:
+    dims = inputs.shape.as_list()
+    height = dims[h_axis]
+    width = dims[w_axis]
+  height = height if height is not None else inputs_shape[h_axis]
+  width = width if width is not None else inputs_shape[w_axis]
+
+  kernel_h, kernel_w = layer.kernel_size
+  stride_h, stride_w = layer.strides
+  if layer.output_padding is None:
+    out_pad_h = out_pad_w = None
+  else:
+    out_pad_h, out_pad_w = layer.output_padding
+
+  out_height = conv_utils.deconv_output_length(
+      height,
+      kernel_h,
+      padding=layer.padding,
+      output_padding=out_pad_h,
+      stride=stride_h,
+      dilation=layer.dilation_rate[0],
+  )
+  out_width = conv_utils.deconv_output_length(
+      width,
+      kernel_w,
+      padding=layer.padding,
+      output_padding=out_pad_w,
+      stride=stride_w,
+      dilation=layer.dilation_rate[1],
+  )
+  if layer.data_format == 'channels_first':
+    output_shape = (batch_size, layer.filters, out_height, out_width)
+  else:
+    output_shape = (batch_size, out_height, out_width, layer.filters)
+
+  output_shape_tensor = array_ops_stack.stack(output_shape)
+  outputs = backend.conv2d_transpose(
+      inputs,
+      layer.dequantized_kernel(),
+      output_shape_tensor,
+      strides=layer.strides,
+      padding=layer.padding,
+      data_format=layer.data_format,
+      dilation_rate=layer.dilation_rate,
+  )
+
+  if not context.executing_eagerly():
+    outputs.set_shape(layer.compute_output_shape(inputs.shape))
+
+  if layer.use_bias:
+    outputs = nn.bias_add(
+        outputs,
+        layer.bias,
+        data_format=conv_utils.convert_data_format(layer.data_format, ndim=4),
+    )
+  if layer.activation is not None:
+    return layer.activation(outputs)
+  return outputs
+
+
+def _call_quantized_conv3d_transpose(layer, inputs):
+  inputs_shape = array_ops.shape(inputs)
+  batch_size = inputs_shape[0]
+  if layer.data_format == 'channels_first':
+    d_axis, h_axis, w_axis = 2, 3, 4
+  else:
+    d_axis, h_axis, w_axis = 1, 2, 3
+
+  depth = inputs_shape[d_axis]
+  height = inputs_shape[h_axis]
+  width = inputs_shape[w_axis]
+
+  kernel_d, kernel_h, kernel_w = layer.kernel_size
+  stride_d, stride_h, stride_w = layer.strides
+  if layer.output_padding is None:
+    out_pad_d = out_pad_h = out_pad_w = None
+  else:
+    out_pad_d, out_pad_h, out_pad_w = layer.output_padding
+
+  out_depth = conv_utils.deconv_output_length(
+      depth,
+      kernel_d,
+      padding=layer.padding,
+      output_padding=out_pad_d,
+      stride=stride_d,
+  )
+  out_height = conv_utils.deconv_output_length(
+      height,
+      kernel_h,
+      padding=layer.padding,
+      output_padding=out_pad_h,
+      stride=stride_h,
+  )
+  out_width = conv_utils.deconv_output_length(
+      width,
+      kernel_w,
+      padding=layer.padding,
+      output_padding=out_pad_w,
+      stride=stride_w,
+  )
+  if layer.data_format == 'channels_first':
+    output_shape = (batch_size, layer.filters, out_depth, out_height, out_width)
+    strides = (1, 1, stride_d, stride_h, stride_w)
+  else:
+    output_shape = (batch_size, out_depth, out_height, out_width, layer.filters)
+    strides = (1, stride_d, stride_h, stride_w, 1)
+
+  output_shape_tensor = array_ops_stack.stack(output_shape)
+  outputs = nn.conv3d_transpose(
+      inputs,
+      layer.dequantized_kernel(),
+      output_shape_tensor,
+      strides,
+      data_format=conv_utils.convert_data_format(layer.data_format, ndim=5),
+      padding=layer.padding.upper(),
+  )
+
+  if not context.executing_eagerly():
+    outputs.set_shape(layer.compute_output_shape(inputs.shape))
+
+  if layer.use_bias:
+    outputs = nn.bias_add(
+        outputs,
+        layer.bias,
+        data_format=conv_utils.convert_data_format(layer.data_format, ndim=4),
+    )
 
   if layer.activation is not None:
     return layer.activation(outputs)
@@ -755,6 +985,90 @@ class TurboConv3D(convolutional.Conv3D):
 
   def get_config(self):
     config = super(TurboConv3D, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboConv1DTranspose(convolutional.Conv1DTranspose):
+  """Inference-oriented Conv1DTranspose backed by TurboQuant weights."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboConv1DTranspose, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._kernel_shape = None
+
+  def build(self, input_shape):
+    _build_conv_transpose_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_conv(self, conv_layer)
+
+  def dequantized_kernel(self):
+    kernel = _dequantize_packed_kernel(self)
+    return array_ops.reshape(kernel, list(self._kernel_shape))
+
+  def call(self, inputs):
+    return _call_quantized_conv1d_transpose(self, inputs)
+
+  def get_config(self):
+    config = super(TurboConv1DTranspose, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboConv2DTranspose(convolutional.Conv2DTranspose):
+  """Inference-oriented Conv2DTranspose backed by TurboQuant weights."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboConv2DTranspose, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._kernel_shape = None
+
+  def build(self, input_shape):
+    _build_conv_transpose_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_conv(self, conv_layer)
+
+  def dequantized_kernel(self):
+    kernel = _dequantize_packed_kernel(self)
+    return array_ops.reshape(kernel, list(self._kernel_shape))
+
+  def call(self, inputs):
+    return _call_quantized_conv2d_transpose(self, inputs)
+
+  def get_config(self):
+    config = super(TurboConv2DTranspose, self).get_config()
+    config['quantization_config'] = self.quantization_config.to_dict()
+    return config
+
+
+@generic_utils.register_keras_serializable(package='TurboQuant')
+class TurboConv3DTranspose(convolutional.Conv3DTranspose):
+  """Inference-oriented Conv3DTranspose backed by TurboQuant weights."""
+
+  def __init__(self, *args, quantization_config=None, **kwargs):
+    super(TurboConv3DTranspose, self).__init__(*args, **kwargs)
+    self.quantization_config = TurboQuantConfig.from_dict(quantization_config)
+    self._kernel_shape = None
+
+  def build(self, input_shape):
+    _build_conv_transpose_state(self, input_shape)
+
+  def quantize_from_conv(self, conv_layer: Layer):
+    _quantize_from_conv(self, conv_layer)
+
+  def dequantized_kernel(self):
+    kernel = _dequantize_packed_kernel(self)
+    return array_ops.reshape(kernel, list(self._kernel_shape))
+
+  def call(self, inputs):
+    return _call_quantized_conv3d_transpose(self, inputs)
+
+  def get_config(self):
+    config = super(TurboConv3DTranspose, self).get_config()
     config['quantization_config'] = self.quantization_config.to_dict()
     return config
 

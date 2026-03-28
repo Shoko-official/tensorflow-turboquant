@@ -4,6 +4,20 @@ from dataclasses import asdict
 from dataclasses import dataclass
 
 
+def _strict_from_dict(cls, config):
+  if isinstance(config, cls):
+    return config
+  if not config:
+    return cls()
+
+  unknown_keys = set(config.keys()) - set(cls.__dataclass_fields__.keys())
+  if unknown_keys:
+    raise ValueError(
+        f'Unknown `{cls.__name__}` keys: {sorted(unknown_keys)}.'
+    )
+  return cls(**config)
+
+
 @dataclass(frozen=True)
 class TurboQuantConfig:
   """Configuration for block-wise codebook quantization."""
@@ -91,9 +105,7 @@ class TurboQuantConfig:
 
   @classmethod
   def from_dict(cls, config: dict[str, object] | None) -> 'TurboQuantConfig':
-    if isinstance(config, cls):
-      return config
-    return cls(**config) if config else cls()
+    return _strict_from_dict(cls, config)
 
 
 @dataclass(frozen=True)
@@ -120,6 +132,4 @@ class CalibrationConfig:
 
   @classmethod
   def from_dict(cls, config: dict[str, object] | None) -> 'CalibrationConfig':
-    if isinstance(config, cls):
-      return config
-    return cls(**config) if config else cls()
+    return _strict_from_dict(cls, config)
