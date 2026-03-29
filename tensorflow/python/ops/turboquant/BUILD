@@ -1,4 +1,4 @@
-load("@xla//third_party/rules_python/python:defs.bzl", "py_library")
+load("@xla//third_party/rules_python/python:defs.bzl", "py_binary", "py_library")
 load("//tensorflow:tensorflow.bzl", "py_test")
 
 package(
@@ -102,6 +102,18 @@ py_library(
         ":config",
         ":core",
         ":keras",
+    ],
+)
+
+py_binary(
+    name = "benchmark_turboquant",
+    srcs = ["benchmark_turboquant.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":api",
+        ":config",
+        "//third_party/py/numpy",
+        "//tensorflow/python/keras",
     ],
 )
 

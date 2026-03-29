@@ -88,16 +88,28 @@ def _run_benchmark(seed=123, batch_size=16, warmup=10, steps=50):
 def _print_report(report):
   print('TurboQuant summaries:')
   for summary in report['layer_summaries']:
-    print(
-        f"  - {summary['layer_name']} ({summary['layer_type']}): "
-        f"ratio={summary['compression_ratio']:.2f}x, "
-        f"mse={summary['mean_squared_error']:.6f}, "
-        f"max_abs_error={summary['max_abs_error']:.6f}"
-    )
+    if summary.get('status') == 'quantized':
+      print(
+          f"  - {summary['layer_name']} ({summary['layer_type']}): "
+          f"ratio={summary['compression_ratio']:.2f}x, "
+          f"mse={summary['mean_squared_error']:.6f}, "
+          f"max_abs_error={summary['max_abs_error']:.6f}"
+      )
+    else:
+      print(
+          f"  - {summary['layer_name']} ({summary['layer_type']}): "
+          f"skipped ({summary.get('reason', 'unknown')})"
+      )
 
   print(
       'Total effective compression: '
       f"{report['compression']['ratio']:.2f}x"
+  )
+  print(
+      'Layer coverage: '
+      f"quantized={report['aggregate']['quantized_layers']}, "
+      f"skipped={report['aggregate']['skipped_layers']}, "
+      f"supported={report['aggregate']['supported_layers']}"
   )
   print(
       'Output drift: '
