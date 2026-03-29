@@ -46,14 +46,26 @@ def _as_float_array(value: np.ndarray | list[float]) -> np.ndarray:
   array = np.asarray(value, dtype=np.float32)
   if array.ndim == 0:
     raise ValueError('TurboQuant expects tensors with rank >= 1.')
+  if not np.all(np.isfinite(array)):
+    raise ValueError('TurboQuant only supports finite tensor values.')
   return array
 
 
 def _nearest_codebook_indices(
     values: np.ndarray, codebook: np.ndarray
 ) -> np.ndarray:
-  distances = np.abs(values[..., np.newaxis] - codebook[np.newaxis, :])
-  return np.argmin(distances, axis=-1).astype(np.int32)
+  codebook = np.asarray(codebook, dtype=np.float32).reshape(-1)
+  if codebook.size == 1:
+    return np.zeros(values.shape, dtype=np.int32)
+
+  # Codebooks are sorted during fitting, so a binary-search projection avoids
+  # building a large [values, levels] distance tensor.
+  upper = np.searchsorted(codebook, values, side='left')
+  upper = np.clip(upper, 0, codebook.size - 1)
+  lower = np.clip(upper - 1, 0, codebook.size - 1)
+  upper_dist = np.abs(values - codebook[upper])
+  lower_dist = np.abs(values - codebook[lower])
+  return np.where(lower_dist <= upper_dist, lower, upper).astype(np.int32)
 
 
 def _fit_codebook(samples: np.ndarray, config: TurboQuantConfig) -> np.ndarray:
@@ -76,11 +88,15 @@ def _fit_codebook(samples: np.ndarray, config: TurboQuantConfig) -> np.ndarray:
 
   for _ in range(config.max_iterations):
     assignments = _nearest_codebook_indices(samples, centers)
-    new_centers = centers.copy()
-    for cluster_id in range(levels):
-      cluster_values = samples[assignments == cluster_id]
-      if cluster_values.size:
-        new_centers[cluster_id] = np.mean(cluster_values, dtype=np.float32)
+    cluster_sums = np.bincount(
+        assignments, weights=samples, minlength=levels
+    ).astype(np.float32)
+    cluster_counts = np.bincount(assignments, minlength=levels)
+    new_centers = np.where(
+        cluster_counts > 0,
+        cluster_sums / np.maximum(cluster_counts, 1),
+        centers,
+    ).astype(np.float32)
     new_centers = np.sort(new_centers)
     if np.max(np.abs(new_centers - centers)) <= config.convergence_tolerance:
       centers = new_centers
@@ -134,16 +150,16 @@ def quantize_tensor(
 
   channel_count, num_groups, group_size = normalized.shape
   codebooks = np.zeros((channel_count, config.levels), dtype=np.float32)
-  indices = np.zeros((channel_count, num_groups, group_size), dtype=np.int32)
+  index_dtype = np.uint8 if config.levels <= np.iinfo(np.uint8).max + 1 else np.int32
+  indices = np.zeros((channel_count, num_groups, group_size), dtype=index_dtype)
   quantized = np.zeros_like(grouped, dtype=np.float32)
 
   for channel_id in range(channel_count):
     channel_samples = normalized[channel_id][~outlier_mask[channel_id]]
     codebook = _fit_codebook(channel_samples, config)
     codebooks[channel_id] = codebook
-    indices[channel_id] = _nearest_codebook_indices(
-        normalized[channel_id], codebook
-    )
+    channel_indices = _nearest_codebook_indices(normalized[channel_id], codebook)
+    indices[channel_id] = channel_indices.astype(index_dtype, copy=False)
     quantized[channel_id] = (
         codebook[indices[channel_id]] * scales[channel_id][:, np.newaxis]
     )
@@ -166,9 +182,10 @@ def quantize_tensor(
 
 def dequantize_tensor(encoding: TurboQuantEncoding) -> np.ndarray:
   """Reconstructs a tensor from its TurboQuant encoding."""
+  indices = encoding.indices.astype(np.intp, copy=False)
   gathered = np.take_along_axis(
       encoding.codebooks[:, np.newaxis, :],
-      encoding.indices,
+      indices,
       axis=2,
   )
   grouped = gathered * encoding.scales[:, :, np.newaxis] + encoding.residual

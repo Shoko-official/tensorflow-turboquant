@@ -67,6 +67,30 @@ class TurboQuantCoreTest(unittest.TestCase):
     self.assertIn('mean_squared_error', summary)
     self.assertGreater(summary['compression_ratio'], 1.0)
 
+  def test_quantize_rejects_non_finite_values(self):
+    tensor = np.ones((8, 8), dtype=np.float32)
+    tensor[3, 2] = np.nan
+    with self.assertRaisesRegex(ValueError, 'finite'):
+      quantize_tensor(tensor, TurboQuantConfig())
+
+  def test_encoding_uses_compact_index_dtype(self):
+    tensor = np.linspace(-1.0, 1.0, num=1024, dtype=np.float32).reshape(64, 16)
+    encoding = quantize_tensor(
+        tensor, TurboQuantConfig(num_bits=4, group_size=8)
+    )
+    self.assertEqual(encoding.indices.dtype, np.uint8)
+
+  def test_round_trip_supports_non_terminal_axis(self):
+    rng = np.random.default_rng(123)
+    tensor = rng.normal(size=(5, 7, 11)).astype(np.float32)
+    config = TurboQuantConfig(num_bits=4, group_size=8, axis=1)
+
+    encoding = quantize_tensor(tensor, config)
+    restored = dequantize_tensor(encoding)
+
+    self.assertEqual(restored.shape, tensor.shape)
+    self.assertLess(np.mean(np.square(tensor - restored)), 0.06)
+
   def test_config_from_dict_rejects_unknown_keys(self):
     with self.assertRaisesRegex(ValueError, 'Unknown `TurboQuantConfig` keys'):
       TurboQuantConfig.from_dict({'group_size': 8, 'unknown_key': 1})
