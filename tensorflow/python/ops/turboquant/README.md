@@ -143,3 +143,10 @@ Run:
 python tensorflow/python/ops/turboquant/benchmark_turboquant.py \
   --json_output /tmp/turboquant_benchmark.json
 ```
+
+Or through Bazel:
+
+```bash
+bazel run //tensorflow/python/ops/turboquant:benchmark_turboquant -- \
+  --json_output=/tmp/turboquant_benchmark.json
+```
