@@ -72,6 +72,20 @@ report = api.quantize_model(
     representative_dataset=representative_dataset,
     dry_run=True,
 )
+
+scoped_quantized_model = api.quantize_model(
+    model,
+    config.TurboQuantConfig(num_bits=4, group_size=64),
+    target_layer_names=['encoder_dense', 'decoder_dense'],
+    exclude_layer_names=['decoder_dense'],
+)
+
+summary_report = api.summarize_model(
+    model,
+    config.TurboQuantConfig(num_bits=4, group_size=64),
+    include_skipped=True,
+    return_report=True,
+)
 ```
 
 ## Design Notes
@@ -94,6 +108,8 @@ report = api.quantize_model(
   normalized-error objectives.
 - `quantize_model(auto_tune=True, ...)` can consume the same objectives and
   automatically apply per-layer quantization settings.
+- `target_layer_names` and `exclude_layer_names` allow explicit scoping of
+  quantization/recommendation to specific layers in larger models.
 - `quantize_model(..., representative_dataset=..., calibration_config=...)`
   can apply optional activation-aware skip heuristics when
   `max_normalized_mean_squared_error` or `max_normalized_max_abs_error` are set
@@ -101,6 +117,11 @@ report = api.quantize_model(
 - `quantize_model(dry_run=True)` returns a structured decision report without
   cloning the model, and `strict=True` turns skipped selected layers into
   explicit errors.
+- `quantize_model(return_report=True)` and `summarize_model(return_report=True)`
+  include an aggregate model-level section with total packed bytes, effective
+  compression ratio, and skip reason counts.
+- Re-quantizing an already TurboQuant-wrapped model is idempotent: packed
+  wrapper state is preserved rather than being interpreted as raw float weights.
 - `export_saved_model()` emits a TensorFlow SavedModel with a stable
   `serving_default` signature for inference, and `load_saved_model()` restores
   the exported inference object through the core SavedModel loader.
