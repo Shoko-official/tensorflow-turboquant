@@ -49,13 +49,10 @@ def _run_benchmark(seed=123, batch_size=16, warmup=10, steps=50):
   report = quantize_model(model, config, return_report=True)
   quantized_model = report['model']
   summaries = report['summaries']
+  aggregate = report['aggregate']
 
   reference_outputs = model(inputs).numpy()
   quantized_outputs = quantized_model(inputs).numpy()
-  total_original_bytes = float(
-      sum(item['original_bytes'] for item in summaries)
-  )
-  total_packed_bytes = float(sum(item['packed_bytes'] for item in summaries))
   float_ms = _measure_latency(model, inputs, warmup=warmup, steps=steps) * 1e3
   turbo_ms = (
       _measure_latency(quantized_model, inputs, warmup=warmup, steps=steps) * 1e3
@@ -67,14 +64,11 @@ def _run_benchmark(seed=123, batch_size=16, warmup=10, steps=50):
       'benchmark_steps': int(steps),
       'quantization_config': config.to_dict(),
       'compression': {
-          'original_bytes': total_original_bytes,
-          'packed_bytes': total_packed_bytes,
-          'ratio': (
-              total_original_bytes / total_packed_bytes
-              if total_packed_bytes
-              else float('inf')
-          ),
+          'original_bytes': float(aggregate['total_original_bytes']),
+          'packed_bytes': float(aggregate['total_packed_bytes']),
+          'ratio': float(aggregate['effective_compression_ratio']),
       },
+      'aggregate': aggregate,
       'output_drift': {
           'mean_squared_error': float(
               np.mean(np.square(reference_outputs - quantized_outputs))
