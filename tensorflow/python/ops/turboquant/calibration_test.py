@@ -8,10 +8,12 @@ from tensorflow.python.keras.layers import Embedding
 from tensorflow.python.keras.layers import Flatten
 from tensorflow.python.keras.layers import InputLayer
 from tensorflow.python.ops.turboquant.api import quantize_model
+from tensorflow.python.ops.turboquant.api import recommend_layer_configs
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
+from tensorflow.python.ops.turboquant.keras import TurboDense
 from tensorflow.python.platform import test
 
 
@@ -138,6 +140,70 @@ class TurboCalibrationTest(test.TestCase):
         summaries[0]['reason'], 'normalized_mean_squared_error_too_high'
     )
     self.assertIsInstance(quantized_model.layers[-1], Dense)
+
+  def test_summarize_model_return_report_contains_aggregate(self):
+    model = Sequential([
+        InputLayer(input_shape=(10,), dtype='int32'),
+        Embedding(1024, 32),
+        Flatten(),
+        Dense(8),
+    ])
+    dataset = [
+        np.arange(40, dtype=np.int32).reshape(4, 10) % 1024,
+        np.arange(40, 80, dtype=np.int32).reshape(4, 10) % 1024,
+    ]
+    model(dataset[0])
+
+    report = summarize_model(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+        include_skipped=True,
+        representative_dataset=dataset,
+        calibration_config=CalibrationConfig(max_steps=8, max_samples=16),
+        return_report=True,
+    )
+
+    self.assertIn('summaries', report)
+    self.assertIn('aggregate', report)
+    self.assertLen(report['summaries'], 2)
+    self.assertGreaterEqual(report['aggregate']['supported_layers'], 2)
+    self.assertGreaterEqual(
+        report['aggregate']['effective_compression_ratio'], 1.0
+    )
+
+  def test_recommend_and_quantize_respect_layer_name_filters(self):
+    model = Sequential([
+        InputLayer(input_shape=(16,)),
+        Dense(12, activation='relu', name='dense_a'),
+        Dense(6, name='dense_b'),
+    ])
+    dataset = [
+        np.ones((4, 16), dtype=np.float32),
+        np.full((4, 16), 0.5, dtype=np.float32),
+    ]
+    model(dataset[0])
+
+    recommendations = recommend_layer_configs(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+        representative_dataset=dataset,
+        calibration_config=CalibrationConfig(max_steps=8, max_samples=16),
+        target_layer_names=['dense_b'],
+        include_skipped=True,
+    )
+    by_name = {item['layer_name']: item for item in recommendations}
+    self.assertEqual(by_name['dense_a']['status'], 'skipped')
+    self.assertEqual(by_name['dense_a']['reason'], 'not_selected_by_filter')
+
+    quantized_model = quantize_model(
+        model,
+        TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0),
+        representative_dataset=dataset,
+        calibration_config=CalibrationConfig(max_steps=8, max_samples=16),
+        target_layer_names=['dense_b'],
+    )
+    self.assertIsInstance(quantized_model.get_layer('dense_a'), Dense)
+    self.assertIsInstance(quantized_model.get_layer('dense_b'), TurboDense)
 
 
 if __name__ == '__main__':
