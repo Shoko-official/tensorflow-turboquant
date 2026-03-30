@@ -59,6 +59,7 @@ class TurboKerasIntegrationTest(test.TestCase):
         layer for layer in quantized_model.layers if isinstance(layer, TurboDense)
     ]
     self.assertLen(dense_like_layers, 2)
+    self.assertEqual(dense_like_layers[0].indices.dtype.name, 'uint8')
 
   def test_quantize_model_replaces_embedding_layers(self):
     model = Sequential([

@@ -32,6 +32,12 @@ def _packed_attr_name(prefix, name):
   return f'{prefix}_{name}' if prefix else name
 
 
+def _index_dtype_for_config(quantization_config):
+  if quantization_config.levels <= 256:
+    return dtypes.uint8
+  return dtypes.int32
+
+
 def _set_packed_attr(layer, prefix, name, value):
   setattr(layer, _packed_attr_name(prefix, name), value)
 
@@ -43,6 +49,7 @@ def _get_packed_attr(layer, prefix, name):
 def _build_packed_kernel_weights(layer, output_channels, row_count, prefix=None):
   """Creates non-trainable variables for a packed TurboQuant kernel."""
   quantization_config = layer.quantization_config
+  index_dtype = _index_dtype_for_config(quantization_config)
   num_groups = (
       row_count + quantization_config.group_size - 1
   ) // quantization_config.group_size
@@ -82,7 +89,7 @@ def _build_packed_kernel_weights(layer, output_channels, row_count, prefix=None)
           _packed_attr_name(prefix, 'indices'),
           shape=[output_channels, num_groups, quantization_config.group_size],
           initializer='zeros',
-          dtype=dtypes.int32,
+          dtype=index_dtype,
           trainable=False),
   )
   _set_packed_attr(
@@ -101,7 +108,10 @@ def _build_packed_kernel_weights(layer, output_channels, row_count, prefix=None)
 def _assign_encoding_state(layer, encoding: TurboQuantEncoding, prefix=None):
   _get_packed_attr(layer, prefix, 'codebooks').assign(encoding.codebooks)
   _get_packed_attr(layer, prefix, 'scales').assign(encoding.scales)
-  _get_packed_attr(layer, prefix, 'indices').assign(encoding.indices)
+  indices_var = _get_packed_attr(layer, prefix, 'indices')
+  _get_packed_attr(layer, prefix, 'indices').assign(
+      encoding.indices.astype(indices_var.dtype.as_numpy_dtype, copy=False)
+  )
   _get_packed_attr(layer, prefix, 'residual').assign(encoding.residual)
 
 
@@ -116,7 +126,9 @@ def _dequantize_packed_kernel(layer, prefix=None):
   packed_num_groups = _get_packed_attr(layer, prefix, '_packed_num_groups')
   packed_row_count = _get_packed_attr(layer, prefix, '_packed_row_count')
 
-  gathered = array_ops.gather(codebooks, indices, axis=1, batch_dims=1)
+  gathered = array_ops.gather(
+      codebooks, math_ops.cast(indices, dtypes.int32), axis=1, batch_dims=1
+  )
   grouped = (
       math_ops.cast(gathered, layer._compute_dtype_object)
       * array_ops.expand_dims(
