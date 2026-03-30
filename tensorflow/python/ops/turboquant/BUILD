@@ -98,16 +98,44 @@ py_library(
     ],
 )
 
-py_binary(
-    name = "benchmark_turboquant",
+py_library(
+    name = "benchmark_lib",
     srcs = ["benchmark_turboquant.py"],
     srcs_version = "PY3",
+    strict_deps = False,
     deps = [
         ":api",
         ":config",
         "//third_party/py/numpy",
         "//tensorflow/python/keras",
     ],
+)
+
+py_binary(
+    name = "benchmark_turboquant",
+    srcs = ["benchmark_turboquant.py"],
+    srcs_version = "PY3",
+    deps = [":benchmark_lib"],
+)
+
+py_library(
+    name = "profile_lib",
+    srcs = ["profile_turboquant.py"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = [
+        ":api",
+        ":config",
+        "//third_party/py/numpy",
+        "//tensorflow/python/keras",
+    ],
+)
+
+py_binary(
+    name = "profile_turboquant",
+    srcs = ["profile_turboquant.py"],
+    srcs_version = "PY3",
+    deps = [":profile_lib"],
 )
 
 py_test(
@@ -147,5 +175,16 @@ py_test(
         "//tensorflow/python/keras",
         "//tensorflow/python/platform:client_testlib",
         "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "benchmark_test",
+    srcs = ["benchmark_test.py"],
+    deps = [
+        ":benchmark_lib",
+        ":config",
+        ":profile_lib",
+        "//tensorflow/python/platform:client_testlib",
     ],
 )
