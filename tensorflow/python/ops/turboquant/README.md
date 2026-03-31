@@ -93,6 +93,9 @@ summary_report = api.summarize_model(
 - The first implementation is intentionally weight-only and inference-oriented.
   It avoids changing TensorFlow MLIR or SavedModel quantization passes until the
   Python-layer behavior and error profile are covered by tests.
+- Packed indices use an unsigned compact layout (`uint8` up to 8-bit
+  quantization levels) in both core encodings and Keras wrapper state to reduce
+  runtime memory overhead.
 - Compression numbers reported by `summarize_encoding()` and `summarize_model()`
   estimate the effective packed footprint. They are not raw checkpoint sizes.
 - `summarize_model(include_skipped=True)` also reports ignored layers and the
@@ -128,19 +131,27 @@ summary_report = api.summarize_model(
 - The tensor packing API is shape-generic, so extending support beyond the
   current wrappers does not require reworking the quantizer itself.
 
-## Benchmark
+## Benchmark Suite
 
-A minimal reproducible benchmark is available in
+A reproducible benchmark suite is available in
 `tensorflow/python/ops/turboquant/benchmark_turboquant.py`. It reports:
 
-- per-layer effective compression,
-- end-to-end output drift on a mixed depthwise/separable/Dense stack,
-- average batch latency for the float and TurboQuant models.
+- matrix results across multiple model families and batch sizes,
+- compression ratio statistics,
+- output drift (MSE / max absolute error),
+- latency and throughput distributions (`mean`, `p50`, `p95`) for float and
+  TurboQuant variants.
+
+The benchmark protocol used for comparisons is documented in
+`tensorflow/python/ops/turboquant/REPRODUCIBILITY.md`.
 
 Run:
 
 ```bash
 python tensorflow/python/ops/turboquant/benchmark_turboquant.py \
+  --models dense_mlp,conv2d_stack,depthwise_separable \
+  --batch_sizes 1,8,32 \
+  --repeats 3 \
   --json_output /tmp/turboquant_benchmark.json
 ```
 
@@ -148,5 +159,29 @@ Or through Bazel:
 
 ```bash
 bazel run //tensorflow/python/ops/turboquant:benchmark_turboquant -- \
+  --models=dense_mlp,conv2d_stack,depthwise_separable \
+  --batch_sizes=1,8,32 \
+  --repeats=3 \
   --json_output=/tmp/turboquant_benchmark.json
+```
+
+## Profiling
+
+For a stage-level profile (`summarize_model`, `quantize_model`, float
+inference, TurboQuant inference), use:
+
+```bash
+python tensorflow/python/ops/turboquant/profile_turboquant.py \
+  --batch_size 16 \
+  --benchmark_steps 50 \
+  --json_output /tmp/turboquant_profile.json
+```
+
+or with Bazel:
+
+```bash
+bazel run //tensorflow/python/ops/turboquant:profile_turboquant -- \
+  --batch_size=16 \
+  --benchmark_steps=50 \
+  --json_output=/tmp/turboquant_profile.json
 ```
