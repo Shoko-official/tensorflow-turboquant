@@ -194,6 +194,7 @@ class TurboCalibrationTest(test.TestCase):
     by_name = {item['layer_name']: item for item in recommendations}
     self.assertEqual(by_name['dense_a']['status'], 'skipped')
     self.assertEqual(by_name['dense_a']['reason'], 'not_selected_by_filter')
+    self.assertIn('candidate_search_space', by_name['dense_b'])
 
     quantized_model = quantize_model(
         model,

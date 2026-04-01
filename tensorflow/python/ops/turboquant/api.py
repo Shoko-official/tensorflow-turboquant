@@ -465,6 +465,16 @@ def _build_candidate_config(base_config,
   )
 
 
+def _effective_group_candidates(group_candidates, layer_summary):
+  num_elements = int(layer_summary.get('num_elements', 0))
+  if num_elements <= 0:
+    return group_candidates
+  valid = [group_size for group_size in group_candidates if group_size <= num_elements]
+  if not valid:
+    valid = [min(group_candidates)]
+  return tuple(sorted(set(valid)))
+
+
 def recommend_layer_configs(
     model,
     quantization_config=None,
@@ -528,9 +538,17 @@ def recommend_layer_configs(
         recommendations.append(base_summary)
       continue
 
+    layer_group_candidates = _effective_group_candidates(
+        group_candidates, base_summary
+    )
+    candidate_search_space = (
+        len(bits_candidates)
+        * len(layer_group_candidates)
+        * len(outlier_candidates)
+    )
     candidate_summaries = []
     for num_bits, group_size, outlier_threshold in itertools.product(
-        bits_candidates, group_candidates, outlier_candidates
+        bits_candidates, layer_group_candidates, outlier_candidates
     ):
       try:
         candidate_config = _build_candidate_config(
@@ -575,6 +593,7 @@ def recommend_layer_configs(
           best['evaluated_quantization_config']
       )
       recommendation['candidate_count'] = len(candidate_summaries)
+      recommendation['candidate_search_space'] = int(candidate_search_space)
       _set_final_reason(recommendation, recommendation['reason'])
     else:
       quantized_candidates = [
@@ -600,6 +619,7 @@ def recommend_layer_configs(
       recommendation['status'] = 'skipped'
       _set_final_reason(recommendation, 'no_candidate_meets_constraints')
       recommendation['candidate_count'] = len(candidate_summaries)
+      recommendation['candidate_search_space'] = int(candidate_search_space)
 
     if recommendation['status'] != 'quantized' and not include_skipped:
       continue

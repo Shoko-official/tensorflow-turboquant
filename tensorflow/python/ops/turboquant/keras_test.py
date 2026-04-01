@@ -500,6 +500,9 @@ class TurboKerasIntegrationTest(test.TestCase):
     )
     self.assertLen(recommendations, 2)
     self.assertTrue(all('candidate_count' in item for item in recommendations))
+    self.assertTrue(
+        all('candidate_search_space' in item for item in recommendations)
+    )
 
     report = quantize_model(
         model,
