@@ -26,6 +26,17 @@ python tensorflow/python/ops/turboquant/benchmark_turboquant.py \
   --json_output /tmp/turboquant_benchmark.json
 ```
 
+Real-model benchmark:
+
+```bash
+python tensorflow/python/ops/turboquant/benchmark_real_models.py \
+  --models residual_cnn,separable_cnn \
+  --seeds 123,456,789 \
+  --dataset_source synthetic \
+  --train_epochs 1 \
+  --json_output /tmp/turboquant_real_models.json
+```
+
 Stage-level profile:
 
 ```bash
@@ -38,6 +49,27 @@ python tensorflow/python/ops/turboquant/profile_turboquant.py \
   --group_size 8 \
   --outlier_threshold 6.0 \
   --json_output /tmp/turboquant_profile.json
+```
+
+Statistical aggregation across repeated runs:
+
+```bash
+python tensorflow/python/ops/turboquant/analyze_turboquant_results.py \
+  /tmp/turboquant_benchmark_seed1.json \
+  /tmp/turboquant_benchmark_seed2.json \
+  /tmp/turboquant_benchmark_seed3.json \
+  --json_output /tmp/turboquant_summary.json
+```
+
+Ablation search:
+
+```bash
+python tensorflow/python/ops/turboquant/run_turboquant_ablations.py \
+  --num_bits 2,3,4 \
+  --group_sizes 8,16,32 \
+  --outlier_thresholds 4.0,6.0,8.0 \
+  --seeds 123,456,789 \
+  --json_output /tmp/turboquant_ablations.json
 ```
 
 ## Metrics

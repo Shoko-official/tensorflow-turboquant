@@ -100,6 +100,8 @@ summary_report = api.summarize_model(
   estimate the effective packed footprint. They are not raw checkpoint sizes.
 - `serialize_encoding()` / `deserialize_encoding()` provide a compact
   bit-packed index format for storing or moving core TurboQuant encodings.
+- Serialized payloads carry a format marker and version field to support
+  compatibility checks during restoration.
 - `summarize_model(include_skipped=True)` also reports ignored layers and the
   reason they were left untouched, such as a kernel that is too small or a
   packing layout that is not profitable.
@@ -147,6 +149,12 @@ A reproducible benchmark suite is available in
 The benchmark protocol used for comparisons is documented in
 `tensorflow/python/ops/turboquant/REPRODUCIBILITY.md`.
 
+Project maintenance references:
+- `CONTRIBUTING_TURBOQUANT.md`
+- `KNOWN_LIMITATIONS.md`
+- `ROADMAP.md`
+- `RELEASE_CHECKLIST.md`
+
 Run:
 
 ```bash
@@ -165,6 +173,55 @@ bazel run //tensorflow/python/ops/turboquant:benchmark_turboquant -- \
   --batch_sizes=1,8,32 \
   --repeats=3 \
   --json_output=/tmp/turboquant_benchmark.json
+```
+
+## Real-Model Benchmark
+
+`benchmark_real_models.py` targets realistic CNN families and supports either
+synthetic data or an external `.npz` dataset (`x` and optional `y` arrays):
+
+```bash
+python tensorflow/python/ops/turboquant/benchmark_real_models.py \
+  --models residual_cnn,separable_cnn \
+  --seeds 123,456,789 \
+  --dataset_source synthetic \
+  --train_epochs 1 \
+  --json_output /tmp/turboquant_real_models.json
+```
+
+To benchmark on a local real dataset dump:
+
+```bash
+python tensorflow/python/ops/turboquant/benchmark_real_models.py \
+  --dataset_source npz \
+  --dataset_npz_path /path/to/dataset.npz \
+  --json_output /tmp/turboquant_real_models_npz.json
+```
+
+`dataset.npz` must provide:
+- `x`: float32 tensor shaped `[N, 32, 32, 3]`
+- `y` (optional): int labels shaped `[N]`
+
+## Scientific Analysis
+
+Aggregate multiple benchmark reports with confidence intervals:
+
+```bash
+python tensorflow/python/ops/turboquant/analyze_turboquant_results.py \
+  /tmp/turboquant_benchmark_seed1.json \
+  /tmp/turboquant_benchmark_seed2.json \
+  --json_output /tmp/turboquant_summary.json
+```
+
+Run an ablation search over quantization hyper-parameters:
+
+```bash
+python tensorflow/python/ops/turboquant/run_turboquant_ablations.py \
+  --num_bits 2,3,4 \
+  --group_sizes 8,16,32 \
+  --outlier_thresholds 4.0,6.0,8.0 \
+  --seeds 123,456,789 \
+  --json_output /tmp/turboquant_ablations.json
 ```
 
 ## Profiling
@@ -187,3 +244,9 @@ bazel run //tensorflow/python/ops/turboquant:profile_turboquant -- \
   --benchmark_steps=50 \
   --json_output=/tmp/turboquant_profile.json
 ```
+
+## Experimental C++ Path
+
+An experimental C++ custom op (`TurboQuantUnpackIndices`) is provided for
+packed-index unpacking in latency-sensitive deployments. The op is exposed via
+`cpp_ops.py` and can be probed with `has_cpp_kernels()`.
