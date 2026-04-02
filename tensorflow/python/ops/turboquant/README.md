@@ -98,6 +98,8 @@ summary_report = api.summarize_model(
   runtime memory overhead.
 - Compression numbers reported by `summarize_encoding()` and `summarize_model()`
   estimate the effective packed footprint. They are not raw checkpoint sizes.
+- `serialize_encoding()` / `deserialize_encoding()` provide a compact
+  bit-packed index format for storing or moving core TurboQuant encodings.
 - `summarize_model(include_skipped=True)` also reports ignored layers and the
   reason they were left untouched, such as a kernel that is too small or a
   packing layout that is not profitable.

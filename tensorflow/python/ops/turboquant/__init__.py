@@ -10,10 +10,14 @@ from tensorflow.python.ops.turboquant.calibration import collect_calibration_sta
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.core import TurboQuantEncoding
+from tensorflow.python.ops.turboquant.core import deserialize_encoding
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
+from tensorflow.python.ops.turboquant.core import pack_indices
 from tensorflow.python.ops.turboquant.core import quantize_tensor
+from tensorflow.python.ops.turboquant.core import serialize_encoding
 from tensorflow.python.ops.turboquant.core import summarize_encoding
+from tensorflow.python.ops.turboquant.core import unpack_indices
 from tensorflow.python.ops.turboquant.keras import TurboConv1D
 from tensorflow.python.ops.turboquant.keras import TurboConv1DTranspose
 from tensorflow.python.ops.turboquant.keras import TurboConv2D
@@ -42,14 +46,18 @@ __all__ = [
     'TurboSeparableConv1D',
     'TurboSeparableConv2D',
     'collect_calibration_stats',
+    'deserialize_encoding',
     'dequantize_tensor',
     'estimate_packed_bytes',
     'export_saved_model',
     'get_custom_objects',
     'load_saved_model',
+    'pack_indices',
     'quantize_model',
     'quantize_tensor',
     'recommend_layer_configs',
+    'serialize_encoding',
     'summarize_encoding',
     'summarize_model',
+    'unpack_indices',
 ]

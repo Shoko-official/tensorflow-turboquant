@@ -214,6 +214,103 @@ def estimate_packed_bytes(encoding: TurboQuantEncoding) -> int:
   return index_bytes + codebook_bytes + scale_bytes + residual_bytes
 
 
+def pack_indices(indices: np.ndarray, num_bits: int) -> np.ndarray:
+  """Packs quantized indices in a compact little-endian bitstream."""
+  if num_bits < 1 or num_bits > 8:
+    raise ValueError(f'`num_bits` must be in [1, 8]. Got: {num_bits}.')
+  flat = np.asarray(indices, dtype=np.int32).reshape(-1)
+  if flat.size == 0:
+    return np.zeros((0,), dtype=np.uint8)
+  max_value = (1 << num_bits) - 1
+  if np.any(flat < 0) or np.any(flat > max_value):
+    raise ValueError(
+        'All packed indices must be in '
+        f'[0, {max_value}] for num_bits={num_bits}.'
+    )
+
+  total_bits = int(flat.size * num_bits)
+  packed = np.zeros((int(math.ceil(total_bits / 8.0)),), dtype=np.uint8)
+  bit_offset = 0
+  for value in flat:
+    byte_index = bit_offset // 8
+    bit_index = bit_offset % 8
+    packed[byte_index] |= (int(value) << bit_index) & 0xFF
+    overflow_bits = bit_index + num_bits - 8
+    if overflow_bits > 0 and byte_index + 1 < packed.size:
+      packed[byte_index + 1] |= (int(value) >> (num_bits - overflow_bits)) & 0xFF
+    bit_offset += num_bits
+  return packed
+
+
+def unpack_indices(
+    packed: np.ndarray, shape: tuple[int, ...], num_bits: int
+) -> np.ndarray:
+  """Unpacks quantized indices from a compact little-endian bitstream."""
+  if num_bits < 1 or num_bits > 8:
+    raise ValueError(f'`num_bits` must be in [1, 8]. Got: {num_bits}.')
+  flat_size = int(np.prod(shape))
+  if flat_size == 0:
+    return np.zeros(shape, dtype=np.uint8)
+  packed = np.asarray(packed, dtype=np.uint8).reshape(-1)
+  total_bits = flat_size * num_bits
+  needed_bytes = int(math.ceil(total_bits / 8.0))
+  if packed.size < needed_bytes:
+    raise ValueError(
+        'Packed indices payload is too small for the requested shape and '
+        f'bit width: need {needed_bytes} bytes, got {packed.size}.'
+    )
+
+  max_value = (1 << num_bits) - 1
+  flat = np.zeros((flat_size,), dtype=np.uint8)
+  bit_offset = 0
+  for i in range(flat_size):
+    byte_index = bit_offset // 8
+    bit_index = bit_offset % 8
+    value = int(packed[byte_index]) >> bit_index
+    overflow_bits = bit_index + num_bits - 8
+    if overflow_bits > 0:
+      value |= int(packed[byte_index + 1]) << (8 - bit_index)
+    flat[i] = np.uint8(value & max_value)
+    bit_offset += num_bits
+  return flat.reshape(shape)
+
+
+def serialize_encoding(encoding: TurboQuantEncoding) -> dict[str, object]:
+  """Returns a serialized dictionary with packed TurboQuant indices."""
+  return {
+      'original_shape': tuple(int(dim) for dim in encoding.original_shape),
+      'axis': int(encoding.axis),
+      'group_size': int(encoding.group_size),
+      'num_bits': int(encoding.num_bits),
+      'row_count': int(encoding.row_count),
+      'padded_row_count': int(encoding.padded_row_count),
+      'indices_shape': tuple(int(dim) for dim in encoding.indices.shape),
+      'indices_packed': pack_indices(encoding.indices, encoding.num_bits),
+      'codebooks': np.asarray(encoding.codebooks, dtype=np.float32),
+      'scales': np.asarray(encoding.scales, dtype=np.float32),
+      'residual': np.asarray(encoding.residual, dtype=np.float32),
+  }
+
+
+def deserialize_encoding(payload: dict[str, object]) -> TurboQuantEncoding:
+  """Restores a `TurboQuantEncoding` produced by `serialize_encoding`."""
+  indices_shape = tuple(int(dim) for dim in payload['indices_shape'])
+  num_bits = int(payload['num_bits'])
+  indices = unpack_indices(payload['indices_packed'], indices_shape, num_bits)
+  return TurboQuantEncoding(
+      original_shape=tuple(int(dim) for dim in payload['original_shape']),
+      axis=int(payload['axis']),
+      group_size=int(payload['group_size']),
+      num_bits=num_bits,
+      row_count=int(payload['row_count']),
+      padded_row_count=int(payload['padded_row_count']),
+      indices=indices,
+      codebooks=np.asarray(payload['codebooks'], dtype=np.float32),
+      scales=np.asarray(payload['scales'], dtype=np.float32),
+      residual=np.asarray(payload['residual'], dtype=np.float32),
+  )
+
+
 def original_bytes(tensor: np.ndarray | list[float]) -> int:
   array = _as_float_array(tensor)
   return int(array.size * array.dtype.itemsize)

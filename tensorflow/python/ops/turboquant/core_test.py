@@ -7,10 +7,14 @@ import numpy as np
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
+from tensorflow.python.ops.turboquant.core import deserialize_encoding
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
 from tensorflow.python.ops.turboquant.core import original_bytes
+from tensorflow.python.ops.turboquant.core import pack_indices
 from tensorflow.python.ops.turboquant.core import quantize_tensor
+from tensorflow.python.ops.turboquant.core import serialize_encoding
 from tensorflow.python.ops.turboquant.core import summarize_encoding
+from tensorflow.python.ops.turboquant.core import unpack_indices
 
 
 class TurboQuantCoreTest(unittest.TestCase):
@@ -90,6 +94,29 @@ class TurboQuantCoreTest(unittest.TestCase):
 
     self.assertEqual(restored.shape, tensor.shape)
     self.assertLess(np.mean(np.square(tensor - restored)), 0.06)
+
+  def test_pack_and_unpack_indices_round_trip(self):
+    indices = np.array(
+        [[[0, 2, 15, 6], [7, 1, 3, 12]]],
+        dtype=np.uint8,
+    )
+    packed = pack_indices(indices, num_bits=4)
+    restored = unpack_indices(packed, shape=indices.shape, num_bits=4)
+    self.assertAllEqual(restored, indices)
+
+  def test_serialize_and_deserialize_encoding_round_trip(self):
+    rng = np.random.default_rng(7)
+    tensor = rng.normal(size=(32, 16)).astype(np.float32)
+    encoding = quantize_tensor(tensor, TurboQuantConfig(num_bits=4, group_size=8))
+    payload = serialize_encoding(encoding)
+    restored_encoding = deserialize_encoding(payload)
+    self.assertAllEqual(restored_encoding.indices, encoding.indices)
+    self.assertAllClose(
+        dequantize_tensor(restored_encoding),
+        dequantize_tensor(encoding),
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
   def test_config_from_dict_rejects_unknown_keys(self):
     with self.assertRaisesRegex(ValueError, 'Unknown `TurboQuantConfig` keys'):
