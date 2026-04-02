@@ -8,6 +8,8 @@ import numpy as np
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 
 _EPSILON = 1e-8
+_ENCODING_FORMAT_NAME = 'turboquant_encoding'
+_ENCODING_FORMAT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -278,6 +280,8 @@ def unpack_indices(
 def serialize_encoding(encoding: TurboQuantEncoding) -> dict[str, object]:
   """Returns a serialized dictionary with packed TurboQuant indices."""
   return {
+      'format': _ENCODING_FORMAT_NAME,
+      'format_version': _ENCODING_FORMAT_VERSION,
       'original_shape': tuple(int(dim) for dim in encoding.original_shape),
       'axis': int(encoding.axis),
       'group_size': int(encoding.group_size),
@@ -294,6 +298,38 @@ def serialize_encoding(encoding: TurboQuantEncoding) -> dict[str, object]:
 
 def deserialize_encoding(payload: dict[str, object]) -> TurboQuantEncoding:
   """Restores a `TurboQuantEncoding` produced by `serialize_encoding`."""
+  format_name = payload.get('format', _ENCODING_FORMAT_NAME)
+  if format_name != _ENCODING_FORMAT_NAME:
+    raise ValueError(
+        'Unknown TurboQuant encoding format: '
+        f'{format_name!r}. Expected {_ENCODING_FORMAT_NAME!r}.'
+    )
+  format_version = int(payload.get('format_version', 0))
+  if format_version not in (0, _ENCODING_FORMAT_VERSION):
+    raise ValueError(
+        f'Unsupported TurboQuant encoding format version: {format_version}.'
+    )
+
+  required_keys = (
+      'original_shape',
+      'axis',
+      'group_size',
+      'num_bits',
+      'row_count',
+      'padded_row_count',
+      'indices_shape',
+      'indices_packed',
+      'codebooks',
+      'scales',
+      'residual',
+  )
+  missing = [key for key in required_keys if key not in payload]
+  if missing:
+    raise ValueError(
+        'TurboQuant encoding payload is missing required fields: '
+        + ', '.join(sorted(missing))
+    )
+
   indices_shape = tuple(int(dim) for dim in payload['indices_shape'])
   num_bits = int(payload['num_bits'])
   indices = unpack_indices(payload['indices_packed'], indices_shape, num_bits)

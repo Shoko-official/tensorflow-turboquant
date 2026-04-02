@@ -7,6 +7,8 @@ from tensorflow.python.ops.turboquant.api import quantize_model
 from tensorflow.python.ops.turboquant.api import recommend_layer_configs
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
+from tensorflow.python.ops.turboquant.cpp_ops import has_cpp_kernels
+from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_cpp
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.core import TurboQuantEncoding
@@ -51,6 +53,7 @@ __all__ = [
     'estimate_packed_bytes',
     'export_saved_model',
     'get_custom_objects',
+    'has_cpp_kernels',
     'load_saved_model',
     'pack_indices',
     'quantize_model',
@@ -59,5 +62,6 @@ __all__ = [
     'serialize_encoding',
     'summarize_encoding',
     'summarize_model',
+    'unpack_indices_cpp',
     'unpack_indices',
 ]

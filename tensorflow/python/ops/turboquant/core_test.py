@@ -6,6 +6,8 @@ import numpy as np
 
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
+from tensorflow.python.ops.turboquant.cpp_ops import has_cpp_kernels
+from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_cpp
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import deserialize_encoding
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
@@ -117,6 +119,40 @@ class TurboQuantCoreTest(unittest.TestCase):
         atol=1e-6,
         rtol=1e-6,
     )
+    payload = serialize_encoding(encoding)
+    self.assertEqual(payload['format'], 'turboquant_encoding')
+    self.assertEqual(payload['format_version'], 1)
+
+  def test_deserialize_supports_legacy_payload_without_format_keys(self):
+    rng = np.random.default_rng(17)
+    tensor = rng.normal(size=(16, 8)).astype(np.float32)
+    encoding = quantize_tensor(tensor, TurboQuantConfig(num_bits=4, group_size=8))
+    payload = serialize_encoding(encoding)
+    del payload['format']
+    del payload['format_version']
+
+    restored = deserialize_encoding(payload)
+    self.assertAllEqual(restored.indices, encoding.indices)
+
+  def test_deserialize_rejects_unknown_format_version(self):
+    rng = np.random.default_rng(5)
+    tensor = rng.normal(size=(16, 8)).astype(np.float32)
+    encoding = quantize_tensor(tensor, TurboQuantConfig(num_bits=4, group_size=8))
+    payload = serialize_encoding(encoding)
+    payload['format_version'] = 999
+    with self.assertRaisesRegex(ValueError, 'Unsupported TurboQuant encoding'):
+      deserialize_encoding(payload)
+
+  def test_cpp_unpack_matches_python_when_available(self):
+    if not has_cpp_kernels():
+      self.skipTest('TurboQuant C++ kernels are not available in this runtime.')
+    indices = np.arange(128, dtype=np.uint8) % 16
+    packed = pack_indices(indices, num_bits=4)
+    python_unpacked = unpack_indices(packed, shape=(128,), num_bits=4)
+    cpp_unpacked = unpack_indices_cpp(
+        packed=packed, flat_size=128, num_bits=4
+    ).numpy()
+    self.assertAllEqual(cpp_unpacked, python_unpacked)
 
   def test_config_from_dict_rejects_unknown_keys(self):
     with self.assertRaisesRegex(ValueError, 'Unknown `TurboQuantConfig` keys'):

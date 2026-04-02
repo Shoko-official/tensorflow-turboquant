@@ -1,5 +1,5 @@
 load("@xla//third_party/rules_python/python:defs.bzl", "py_binary", "py_library")
-load("//tensorflow:tensorflow.bzl", "py_test")
+load("//tensorflow:tensorflow.bzl", "py_test", "tf_custom_op_library")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -92,6 +92,7 @@ py_library(
     deps = [
         ":api",
         ":calibration",
+        ":cpp_ops",
         ":config",
         ":core",
         ":keras",
@@ -111,11 +112,54 @@ py_library(
     ],
 )
 
+py_library(
+    name = "benchmark_real_models_lib",
+    srcs = ["benchmark_real_models.py"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = [
+        ":api",
+        ":config",
+        "//third_party/py/numpy",
+        "//tensorflow/python/keras",
+        "//tensorflow/python/keras:models",
+    ],
+)
+
+py_library(
+    name = "analyze_lib",
+    srcs = ["analyze_turboquant_results.py"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = [
+        "//third_party/py/numpy",
+    ],
+)
+
+py_library(
+    name = "ablation_lib",
+    srcs = ["run_turboquant_ablations.py"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = [
+        ":benchmark_lib",
+        ":config",
+        "//third_party/py/numpy",
+    ],
+)
+
 py_binary(
     name = "benchmark_turboquant",
     srcs = ["benchmark_turboquant.py"],
     srcs_version = "PY3",
     deps = [":benchmark_lib"],
+)
+
+py_binary(
+    name = "benchmark_real_models",
+    srcs = ["benchmark_real_models.py"],
+    srcs_version = "PY3",
+    deps = [":benchmark_real_models_lib"],
 )
 
 py_library(
@@ -138,10 +182,39 @@ py_binary(
     deps = [":profile_lib"],
 )
 
+py_binary(
+    name = "analyze_turboquant_results",
+    srcs = ["analyze_turboquant_results.py"],
+    srcs_version = "PY3",
+    deps = [":analyze_lib"],
+)
+
+py_binary(
+    name = "run_turboquant_ablations",
+    srcs = ["run_turboquant_ablations.py"],
+    srcs_version = "PY3",
+    deps = [":ablation_lib"],
+)
+
+tf_custom_op_library(
+    name = "turboquant_packed_indices_op.so",
+    srcs = ["packed_indices_op_kernel.cc"],
+)
+
+py_library(
+    name = "cpp_ops",
+    srcs = ["cpp_ops.py"],
+    data = [":turboquant_packed_indices_op.so"],
+    srcs_version = "PY3",
+    strict_deps = False,
+    deps = ["//tensorflow:tensorflow_py"],
+)
+
 py_test(
     name = "core_test",
     srcs = ["core_test.py"],
     deps = [
+        ":cpp_ops",
         ":config",
         ":core",
         "//third_party/py/numpy",
@@ -182,6 +255,9 @@ py_test(
     name = "benchmark_test",
     srcs = ["benchmark_test.py"],
     deps = [
+        ":ablation_lib",
+        ":analyze_lib",
+        ":benchmark_real_models_lib",
         ":benchmark_lib",
         ":config",
         ":profile_lib",
