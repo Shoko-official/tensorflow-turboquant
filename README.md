@@ -48,6 +48,9 @@ The design is intentionally conservative: it adds a testable Python-level
 integration first, without coupling the first release of TurboQuant to deeper
 MLIR or SavedModel rewrites.
 
+Fork attribution and TurboQuant changelog are tracked in
+[`FORK_NOTES.md`](FORK_NOTES.md).
+
 TensorFlow provides stable [Python](https://www.tensorflow.org/api_docs/python)
 and [C++](https://www.tensorflow.org/api_docs/cc) APIs, as well as a
 non-guaranteed backward compatible API for
