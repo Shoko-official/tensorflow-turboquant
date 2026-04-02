@@ -1,0 +1,118 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+name: TurboQuant CI
+
+on:
+  pull_request:
+    paths:
+      - 'tensorflow/python/ops/turboquant/**'
+      - '.github/workflows/turboquant-ci.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'tensorflow/python/ops/turboquant/**'
+      - '.github/workflows/turboquant-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  turboquant-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Bazelisk
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Python syntax checks
+        run: |
+          python -m py_compile \
+            tensorflow/python/ops/turboquant/__init__.py \
+            tensorflow/python/ops/turboquant/api.py \
+            tensorflow/python/ops/turboquant/benchmark_turboquant.py \
+            tensorflow/python/ops/turboquant/benchmark_real_models.py \
+            tensorflow/python/ops/turboquant/analyze_turboquant_results.py \
+            tensorflow/python/ops/turboquant/run_turboquant_ablations.py \
+            tensorflow/python/ops/turboquant/calibration.py \
+            tensorflow/python/ops/turboquant/config.py \
+            tensorflow/python/ops/turboquant/core.py \
+            tensorflow/python/ops/turboquant/keras.py \
+            tensorflow/python/ops/turboquant/profile_turboquant.py
+
+      - name: TurboQuant tests
+        run: |
+          bazel test \
+            //tensorflow/python/ops/turboquant:core_test \
+            //tensorflow/python/ops/turboquant:keras_test \
+            //tensorflow/python/ops/turboquant:calibration_test \
+            //tensorflow/python/ops/turboquant:benchmark_test \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --test_output=errors
+
+      - name: TurboQuant benchmark smoke
+        run: |
+          bazel run //tensorflow/python/ops/turboquant:benchmark_turboquant -- \
+            --models=dense_mlp \
+            --batch_sizes=1 \
+            --warmup_steps=0 \
+            --benchmark_steps=1 \
+            --repeats=1 \
+            --json_output=${RUNNER_TEMP}/turboquant_benchmark.json
+
+      - name: Regression guard
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'turboquant_benchmark.json')
+          with open(path, 'r', encoding='utf-8') as f:
+              report = json.load(f)
+          ratio = float(report['summary']['compression_ratio']['mean'])
+          mse = float(report['summary']['output_mse']['mean'])
+          if ratio < 1.0:
+              raise SystemExit(f'Compression ratio regression: {ratio}')
+          if mse > 0.2:
+              raise SystemExit(f'Output MSE regression: {mse}')
+          print(f'Regression guard passed: ratio={ratio:.4f}, mse={mse:.6f}')
+          PY
+
+  turboquant-windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Bazelisk
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: TurboQuant core smoke test
+        shell: pwsh
+        run: |
+          bazel test //tensorflow/python/ops/turboquant:core_test --repo_env=HERMETIC_PYTHON_VERSION=3.12 --test_output=errors
