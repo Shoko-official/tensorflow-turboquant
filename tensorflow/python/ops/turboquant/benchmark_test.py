@@ -46,8 +46,15 @@ class TurboBenchmarkToolsTest(test.TestCase):
     )
 
     self.assertIn('timings_ms', report)
+    self.assertIn('timing_distributions_ms', report)
+    self.assertIn('hotspots', report)
     self.assertIn('aggregate', report)
     self.assertIn('drift', report)
+    self.assertGreaterEqual(len(report['hotspots']), 1)
+    top_hotspot = report['hotspots'][0]
+    self.assertIn('stage', top_hotspot)
+    self.assertIn('p50_share', top_hotspot)
+    self.assertIn('p95_share', top_hotspot)
     self.assertGreaterEqual(report['aggregate']['supported_layers'], 1)
 
   def test_real_model_benchmark_runs_with_synthetic_data(self):

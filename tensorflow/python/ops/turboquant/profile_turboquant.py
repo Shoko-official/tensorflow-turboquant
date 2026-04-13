@@ -34,6 +34,45 @@ def _measure_average_ms(fn, steps):
   return ((time.perf_counter() - start) * 1e3) / float(steps)
 
 
+def _measure_samples_ms(fn, steps):
+  samples = []
+  for _ in range(steps):
+    start = time.perf_counter()
+    fn()
+    samples.append((time.perf_counter() - start) * 1e3)
+  return samples
+
+
+def _summarize_samples(samples):
+  values = np.asarray(samples, dtype=np.float64)
+  return {
+      'count': int(values.size),
+      'min': float(np.min(values)),
+      'max': float(np.max(values)),
+      'mean': float(np.mean(values)),
+      'p50': float(np.percentile(values, 50)),
+      'p95': float(np.percentile(values, 95)),
+  }
+
+
+def _build_hotspot_rank(distributions):
+  p50_total = float(sum(stage['p50'] for stage in distributions.values()))
+  p95_total = float(sum(stage['p95'] for stage in distributions.values()))
+  hotspots = []
+  for stage_name, stats in distributions.items():
+    p50_share = float(stats['p50'] / p50_total) if p50_total > 0 else 0.0
+    p95_share = float(stats['p95'] / p95_total) if p95_total > 0 else 0.0
+    hotspots.append({
+        'stage': stage_name,
+        'p50_ms': float(stats['p50']),
+        'p95_ms': float(stats['p95']),
+        'p50_share': p50_share,
+        'p95_share': p95_share,
+    })
+  hotspots.sort(key=lambda item: item['p95_share'], reverse=True)
+  return hotspots
+
+
 def _profile(seed, batch_size, warmup_steps, benchmark_steps, config):
   rng = np.random.default_rng(seed)
   inputs = rng.normal(size=(batch_size, 28, 28, 8)).astype(np.float32)
@@ -56,13 +95,25 @@ def _profile(seed, batch_size, warmup_steps, benchmark_steps, config):
     quantized_model(inputs)
 
   float_inference_ms = _measure_average_ms(lambda: model(inputs), benchmark_steps)
+  float_samples_ms = _measure_samples_ms(lambda: model(inputs), benchmark_steps)
   turbo_inference_ms = _measure_average_ms(
+      lambda: quantized_model(inputs), benchmark_steps
+  )
+  turbo_samples_ms = _measure_samples_ms(
       lambda: quantized_model(inputs), benchmark_steps
   )
 
   reference = model(inputs).numpy()
   quantized = quantized_model(inputs).numpy()
   diff = reference - quantized
+
+  timing_distributions = {
+      'summarize_model': _summarize_samples([summarize_ms]),
+      'quantize_model': _summarize_samples([quantize_ms]),
+      'float_inference': _summarize_samples(float_samples_ms),
+      'turboquant_inference': _summarize_samples(turbo_samples_ms),
+  }
+  hotspot_rank = _build_hotspot_rank(timing_distributions)
 
   return {
       'seed': int(seed),
@@ -76,6 +127,8 @@ def _profile(seed, batch_size, warmup_steps, benchmark_steps, config):
           'float_inference_avg': float(float_inference_ms),
           'turboquant_inference_avg': float(turbo_inference_ms),
       },
+      'timing_distributions_ms': timing_distributions,
+      'hotspots': hotspot_rank,
       'aggregate': dict(quantized_report['aggregate']),
       'layer_summaries': quantized_report['summaries'],
       'drift': {
@@ -106,6 +159,14 @@ def _print_report(report):
       f"mse={report['drift']['mean_squared_error']:.6f}, "
       f"max_abs={report['drift']['max_abs_error']:.6f}"
   )
+  top_hotspots = report.get('hotspots', [])
+  if top_hotspots:
+    preview = top_hotspots[:3]
+    formatted = ', '.join(
+        f"{item['stage']} (p95_share={item['p95_share']:.1%})"
+        for item in preview
+    )
+    print(f'Hotspots (p95 share): {formatted}')
 
 
 def main():
