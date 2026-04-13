@@ -72,7 +72,9 @@ jobs:
 
       - name: TurboQuant benchmark smoke
         run: |
-          bazel run //tensorflow/python/ops/turboquant:benchmark_turboquant -- \
+          bazel run \
+            //tensorflow/python/ops/turboquant:benchmark_turboquant \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 -- \
             --models=dense_mlp \
             --batch_sizes=1 \
             --warmup_steps=0 \
