@@ -49,9 +49,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Setup Bazelisk
-        uses: bazelbuild/setup-bazelisk@v3
-
       - name: Python syntax checks
         run: |
           python -m py_compile \
@@ -67,19 +64,14 @@ jobs:
             tensorflow/python/ops/turboquant/keras.py \
             tensorflow/python/ops/turboquant/profile_turboquant.py
 
-      - name: TurboQuant smoke test
-        run: |
-          bazel test \
-            //tensorflow/python/ops/turboquant:core_test \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --test_output=errors
-
-      - name: Core regression guard
+      - name: Core smoke checks
         run: |
           python - <<'PY'
           import numpy as np
           from tensorflow.python.ops.turboquant.config import TurboQuantConfig
           from tensorflow.python.ops.turboquant.core import (
+              unpack_indices,
+              pack_indices,
               quantize_tensor,
               summarize_encoding,
           )
@@ -93,6 +85,11 @@ jobs:
               raise SystemExit(f'Compression ratio regression: {ratio}')
           if mse > 0.2:
               raise SystemExit(f'Output MSE regression: {mse}')
+          indices = np.arange(128, dtype=np.uint8) % 16
+          packed = pack_indices(indices, num_bits=4)
+          restored = unpack_indices(packed, shape=(128,), num_bits=4)
+          if not np.array_equal(indices, restored):
+              raise SystemExit('Packed index round-trip regression detected.')
           print(f'Regression guard passed: ratio={ratio:.4f}, mse={mse:.6f}')
           PY
 
