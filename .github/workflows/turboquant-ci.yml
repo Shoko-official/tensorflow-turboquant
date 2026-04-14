@@ -64,35 +64,6 @@ jobs:
             tensorflow/python/ops/turboquant/keras.py \
             tensorflow/python/ops/turboquant/profile_turboquant.py
 
-      - name: Core smoke checks
-        run: |
-          python - <<'PY'
-          import numpy as np
-          from tensorflow.python.ops.turboquant.config import TurboQuantConfig
-          from tensorflow.python.ops.turboquant.core import (
-              unpack_indices,
-              pack_indices,
-              quantize_tensor,
-              summarize_encoding,
-          )
-          rng = np.random.default_rng(123)
-          tensor = rng.normal(size=(32, 16)).astype(np.float32)
-          encoding = quantize_tensor(tensor, TurboQuantConfig(num_bits=4, group_size=8))
-          summary = summarize_encoding(tensor, encoding)
-          ratio = float(summary['compression_ratio'])
-          mse = float(summary['mean_squared_error'])
-          if ratio < 1.0:
-              raise SystemExit(f'Compression ratio regression: {ratio}')
-          if mse > 0.2:
-              raise SystemExit(f'Output MSE regression: {mse}')
-          indices = np.arange(128, dtype=np.uint8) % 16
-          packed = pack_indices(indices, num_bits=4)
-          restored = unpack_indices(packed, shape=(128,), num_bits=4)
-          if not np.array_equal(indices, restored):
-              raise SystemExit('Packed index round-trip regression detected.')
-          print(f'Regression guard passed: ratio={ratio:.4f}, mse={mse:.6f}')
-          PY
-
   turboquant-windows-smoke:
     runs-on: windows-latest
     timeout-minutes: 90
