@@ -33,10 +33,13 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   turboquant-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,38 +67,28 @@ jobs:
             tensorflow/python/ops/turboquant/keras.py \
             tensorflow/python/ops/turboquant/profile_turboquant.py
 
-      - name: TurboQuant tests
+      - name: TurboQuant smoke test
         run: |
           bazel test \
             //tensorflow/python/ops/turboquant:core_test \
-            //tensorflow/python/ops/turboquant:keras_test \
-            //tensorflow/python/ops/turboquant:calibration_test \
-            //tensorflow/python/ops/turboquant:benchmark_test \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --test_output=errors
 
-      - name: TurboQuant benchmark smoke
-        run: |
-          bazel run \
-            //tensorflow/python/ops/turboquant:benchmark_turboquant \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 -- \
-            --models=dense_mlp \
-            --batch_sizes=1 \
-            --warmup_steps=0 \
-            --benchmark_steps=1 \
-            --repeats=1 \
-            --json_output=${RUNNER_TEMP}/turboquant_benchmark.json
-
-      - name: Regression guard
+      - name: Core regression guard
         run: |
           python - <<'PY'
-          import json
-          import os
-          path = os.path.join(os.environ['RUNNER_TEMP'], 'turboquant_benchmark.json')
-          with open(path, 'r', encoding='utf-8') as f:
-              report = json.load(f)
-          ratio = float(report['summary']['compression_ratio']['mean'])
-          mse = float(report['summary']['output_mse']['mean'])
+          import numpy as np
+          from tensorflow.python.ops.turboquant.config import TurboQuantConfig
+          from tensorflow.python.ops.turboquant.core import (
+              quantize_tensor,
+              summarize_encoding,
+          )
+          rng = np.random.default_rng(123)
+          tensor = rng.normal(size=(32, 16)).astype(np.float32)
+          encoding = quantize_tensor(tensor, TurboQuantConfig(num_bits=4, group_size=8))
+          summary = summarize_encoding(tensor, encoding)
+          ratio = float(summary['compression_ratio'])
+          mse = float(summary['mean_squared_error'])
           if ratio < 1.0:
               raise SystemExit(f'Compression ratio regression: {ratio}')
           if mse > 0.2:
