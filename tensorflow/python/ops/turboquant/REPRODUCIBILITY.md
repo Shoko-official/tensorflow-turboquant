@@ -34,6 +34,10 @@ python tensorflow/python/ops/turboquant/benchmark_real_models.py \
   --seeds 123,456,789 \
   --dataset_source synthetic \
   --train_epochs 1 \
+  --max_turboquant_accuracy_drop 0.05 \
+  --max_baseline_accuracy_drop 0.10 \
+  --min_turboquant_argmax_agreement 0.95 \
+  --min_baseline_argmax_agreement 0.90 \
   --json_output /tmp/turboquant_real_models.json
 ```
 
@@ -79,6 +83,11 @@ python tensorflow/python/ops/turboquant/run_turboquant_ablations.py \
 - Accuracy drift:
   - `mean_squared_error`
   - `max_abs_error`
+- Task-level quality:
+  - top-1 `accuracy`
+  - accuracy delta versus float model
+  - argmax agreement versus float logits
+  - 95% confidence interval over repeated seed runs
 - Runtime:
   - latency `mean`, `p50`, `p95`
   - throughput `mean`, `p50`, `p95`
@@ -87,5 +96,7 @@ python tensorflow/python/ops/turboquant/run_turboquant_ablations.py \
 
 - Run each benchmark case with at least 3 repeats.
 - Compare both aggregate stats and per-case outputs.
+- When using the real-model benchmark for gating, keep the same seed list and
+  quality thresholds in CI and local reproduction commands.
 - Keep raw JSON artifacts with seed/config metadata to make comparisons
   auditable.

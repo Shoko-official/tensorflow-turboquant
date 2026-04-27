@@ -5,6 +5,7 @@ import os
 
 from tensorflow.python.ops.turboquant.analyze_turboquant_results import analyze_reports
 from tensorflow.python.ops.turboquant.benchmark_turboquant import _run_suite
+from tensorflow.python.ops.turboquant.benchmark_real_models import validate_quality_gates
 from tensorflow.python.ops.turboquant.benchmark_real_models import run_real_model_benchmark
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.profile_turboquant import _profile
@@ -75,7 +76,54 @@ class TurboBenchmarkToolsTest(test.TestCase):
         num_classes=5,
     )
     self.assertEqual(report['summary']['case_count'], 1)
-    self.assertIn('turboquant_effective_compression_ratio_mean', report['summary'])
+    self.assertIn('compression_ratio', report['summary'])
+    self.assertIn('argmax_agreement', report['summary'])
+    self.assertIn('accuracy_delta', report['summary'])
+    self.assertIn('confidence_interval_95',
+                  report['summary']['argmax_agreement']['turboquant'])
+
+  def test_real_model_quality_gate_validation(self):
+    report = {
+        'summary': {
+            'accuracy_delta': {
+                'turboquant': {'min': -0.03},
+                'baseline': {'min': -0.01},
+            },
+            'argmax_agreement': {
+                'turboquant': {'min': 0.96},
+                'baseline': {'min': 0.98},
+            },
+            'output_mse': {
+                'turboquant': {'max': 0.02},
+                'baseline': {'max': 0.01},
+            },
+        }
+    }
+    self.assertEqual(
+        [],
+        validate_quality_gates(
+            report,
+            max_turboquant_accuracy_drop=0.05,
+            max_baseline_accuracy_drop=0.05,
+            min_turboquant_argmax_agreement=0.95,
+            min_baseline_argmax_agreement=0.95,
+            max_turboquant_mse=0.05,
+        ),
+    )
+    failures = validate_quality_gates(
+        report,
+        max_turboquant_accuracy_drop=0.02,
+        min_turboquant_argmax_agreement=0.97,
+        max_turboquant_mse=0.01,
+    )
+    self.assertLen(failures, 3)
+    self.assertTrue(
+        any('accuracy drop gate failed' in failure for failure in failures)
+    )
+    self.assertTrue(
+        any('argmax agreement gate failed' in failure for failure in failures)
+    )
+    self.assertTrue(any('output MSE gate failed' in failure for failure in failures))
 
   def test_analyze_reports_aggregates_generated_report(self):
     config = TurboQuantConfig(num_bits=4, group_size=8, outlier_threshold=6.0)
