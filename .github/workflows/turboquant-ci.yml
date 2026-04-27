@@ -49,6 +49,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Setup Bazelisk
+        uses: bazelbuild/setup-bazelisk@v3
+
       - name: Python syntax checks
         run: |
           python -m py_compile \
@@ -63,6 +66,30 @@ jobs:
             tensorflow/python/ops/turboquant/core.py \
             tensorflow/python/ops/turboquant/keras.py \
             tensorflow/python/ops/turboquant/profile_turboquant.py
+
+      - name: TurboQuant benchmark regression tests
+        run: |
+          bazel test //tensorflow/python/ops/turboquant:benchmark_test \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --test_output=errors
+
+      - name: TurboQuant task-level quality smoke
+        run: |
+          bazel run //tensorflow/python/ops/turboquant:benchmark_real_models -- \
+            --models=residual_cnn \
+            --seeds=123,456 \
+            --dataset_source=synthetic \
+            --sample_count=64 \
+            --eval_count=32 \
+            --batch_size=8 \
+            --warmup_steps=0 \
+            --benchmark_steps=1 \
+            --num_classes=5 \
+            --max_turboquant_accuracy_drop=0.10 \
+            --max_baseline_accuracy_drop=0.15 \
+            --min_turboquant_argmax_agreement=0.75 \
+            --min_baseline_argmax_agreement=0.70 \
+            --max_turboquant_mse=2.0
 
   turboquant-windows-smoke:
     runs-on: windows-latest

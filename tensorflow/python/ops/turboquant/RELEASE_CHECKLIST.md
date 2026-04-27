@@ -14,9 +14,9 @@
 
 ## Documentation
 
-- [ ] `README.md` reflects current CLI/tooling and APIs.
-- [ ] `REPRODUCIBILITY.md` includes exact command lines used for release numbers.
-- [ ] `KNOWN_LIMITATIONS.md` and `ROADMAP.md` updated.
+- [x] `README.md` reflects current CLI/tooling and APIs.
+- [x] `REPRODUCIBILITY.md` includes exact command lines used for release numbers.
+- [x] `KNOWN_LIMITATIONS.md` and `ROADMAP.md` updated.
 
 ## Release Metadata
 

@@ -1,13 +1,17 @@
 """Tests for TurboQuant core routines."""
 
+import os
 import unittest
+from unittest import mock
 
 import numpy as np
 
+from tensorflow.python.ops.turboquant.cpp_ops import cpp_kernel_status
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.cpp_ops import has_cpp_kernels
 from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_cpp
+from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_with_fallback
 from tensorflow.python.ops.turboquant.core import dequantize_tensor
 from tensorflow.python.ops.turboquant.core import deserialize_encoding
 from tensorflow.python.ops.turboquant.core import estimate_packed_bytes
@@ -153,6 +157,30 @@ class TurboQuantCoreTest(unittest.TestCase):
         packed=packed, flat_size=128, num_bits=4
     ).numpy()
     self.assertAllEqual(cpp_unpacked, python_unpacked)
+
+  def test_cpp_fallback_matches_python_when_disabled(self):
+    indices = np.arange(128, dtype=np.uint8) % 16
+    packed = pack_indices(indices, num_bits=4)
+    with mock.patch.dict(os.environ, {'TURBOQUANT_CPP_KERNELS': '0'}, clear=False):
+      unpacked = unpack_indices_with_fallback(
+          packed, shape=(128,), num_bits=4
+      ).numpy()
+    self.assertAllEqual(unpacked, unpack_indices(packed, (128,), 4))
+
+  def test_cpp_kernel_status_reports_policy(self):
+    with mock.patch.dict(
+        os.environ, {'TURBOQUANT_CPP_KERNELS': 'required'}, clear=False
+    ):
+      status = cpp_kernel_status()
+    self.assertEqual(status['policy'], 'required')
+    self.assertTrue(status['enabled'])
+
+  def test_cpp_kernel_status_rejects_invalid_policy(self):
+    with mock.patch.dict(
+        os.environ, {'TURBOQUANT_CPP_KERNELS': 'sometimes'}, clear=False
+    ):
+      with self.assertRaisesRegex(ValueError, 'Unsupported TURBOQUANT_CPP_KERNELS'):
+        cpp_kernel_status()
 
   def test_config_from_dict_rejects_unknown_keys(self):
     with self.assertRaisesRegex(ValueError, 'Unknown `TurboQuantConfig` keys'):

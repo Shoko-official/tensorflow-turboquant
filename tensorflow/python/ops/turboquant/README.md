@@ -187,6 +187,8 @@ python tensorflow/python/ops/turboquant/benchmark_real_models.py \
   --seeds 123,456,789 \
   --dataset_source synthetic \
   --train_epochs 1 \
+  --max_turboquant_accuracy_drop 0.05 \
+  --min_turboquant_argmax_agreement 0.95 \
   --json_output /tmp/turboquant_real_models.json
 ```
 
@@ -202,6 +204,13 @@ python tensorflow/python/ops/turboquant/benchmark_real_models.py \
 `dataset.npz` must provide:
 - `x`: float32 tensor shaped `[N, 32, 32, 3]`
 - `y` (optional): int labels shaped `[N]`
+
+The real-model report includes:
+- task-level metrics (`accuracy`, argmax agreement, logits summary),
+- per-metric aggregates with `mean` / `min` / `max` / `stddev`,
+- a simple 95% confidence interval over the seed matrix,
+- optional CLI quality gates that exit non-zero when drift exceeds accepted
+  envelopes.
 
 ## Scientific Analysis
 
@@ -250,4 +259,11 @@ bazel run //tensorflow/python/ops/turboquant:profile_turboquant -- \
 
 An experimental C++ custom op (`TurboQuantUnpackIndices`) is provided for
 packed-index unpacking in latency-sensitive deployments. The op is exposed via
-`cpp_ops.py` and can be probed with `has_cpp_kernels()`.
+`cpp_ops.py` and can be probed with `has_cpp_kernels()` or
+`cpp_kernel_status()`.
+
+Runtime selection is controlled with `TURBOQUANT_CPP_KERNELS`:
+- unset or `auto`: use the C++ op when available, otherwise fall back safely
+  to the Python unpack path,
+- `0` / `off` / `disabled`: force the Python fallback,
+- `1` / `on` / `required`: require the C++ op and raise if it cannot load.

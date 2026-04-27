@@ -7,8 +7,10 @@ from tensorflow.python.ops.turboquant.api import quantize_model
 from tensorflow.python.ops.turboquant.api import recommend_layer_configs
 from tensorflow.python.ops.turboquant.api import summarize_model
 from tensorflow.python.ops.turboquant.calibration import collect_calibration_stats
+from tensorflow.python.ops.turboquant.cpp_ops import cpp_kernel_status
 from tensorflow.python.ops.turboquant.cpp_ops import has_cpp_kernels
 from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_cpp
+from tensorflow.python.ops.turboquant.cpp_ops import unpack_indices_with_fallback
 from tensorflow.python.ops.turboquant.config import CalibrationConfig
 from tensorflow.python.ops.turboquant.config import TurboQuantConfig
 from tensorflow.python.ops.turboquant.core import TurboQuantEncoding
@@ -48,6 +50,7 @@ __all__ = [
     'TurboSeparableConv1D',
     'TurboSeparableConv2D',
     'collect_calibration_stats',
+    'cpp_kernel_status',
     'deserialize_encoding',
     'dequantize_tensor',
     'estimate_packed_bytes',
@@ -63,5 +66,6 @@ __all__ = [
     'summarize_encoding',
     'summarize_model',
     'unpack_indices_cpp',
+    'unpack_indices_with_fallback',
     'unpack_indices',
 ]

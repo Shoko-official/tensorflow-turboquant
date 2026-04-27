@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import time
 
 import numpy as np
@@ -138,6 +139,143 @@ def _evaluate_model(logits, labels):
       'logits_mean_abs': float(np.mean(np.abs(logits))),
       'logits_std': float(np.std(logits)),
   }
+
+
+def _summarize_metric(values):
+  values = np.asarray(values, dtype=np.float64)
+  if values.size == 0:
+    raise ValueError('Expected at least one value to summarize.')
+  ci95_half_width = 0.0
+  if values.size > 1:
+    ci95_half_width = 1.96 * float(np.std(values, ddof=1)) / math.sqrt(values.size)
+  return {
+      'count': int(values.size),
+      'mean': float(np.mean(values)),
+      'min': float(np.min(values)),
+      'max': float(np.max(values)),
+      'stddev': float(np.std(values, ddof=0)),
+      'confidence_interval_95': {
+          'lower': float(np.mean(values) - ci95_half_width),
+          'upper': float(np.mean(values) + ci95_half_width),
+          'half_width': float(ci95_half_width),
+      },
+  }
+
+
+def _speedup_summary(results, key):
+  speedups = []
+  for item in results:
+    float_p50 = item['latency_ms']['float']['p50']
+    quantized_p50 = item['latency_ms'][key]['p50']
+    speedups.append(float_p50 / max(quantized_p50, 1e-9))
+  return _summarize_metric(speedups)
+
+
+def _build_summary(results):
+  turbo_ratios = [
+      float(item['compression']['turboquant']['effective_compression_ratio'])
+      for item in results
+  ]
+  baseline_ratios = [
+      float(item['compression']['baseline']['effective_compression_ratio'])
+      for item in results
+  ]
+  turbo_agreement = [item['drift']['argmax_agreement_turboquant'] for item in results]
+  baseline_agreement = [item['drift']['argmax_agreement_baseline'] for item in results]
+  turbo_accuracy_delta = [
+      item['metric_deltas']['turboquant_accuracy_delta'] for item in results
+  ]
+  baseline_accuracy_delta = [
+      item['metric_deltas']['baseline_accuracy_delta'] for item in results
+  ]
+  turbo_mse = [item['drift']['turboquant_mse'] for item in results]
+  baseline_mse = [item['drift']['baseline_mse'] for item in results]
+
+  return {
+      'case_count': int(len(results)),
+      'compression_ratio': {
+          'turboquant': _summarize_metric(turbo_ratios),
+          'baseline': _summarize_metric(baseline_ratios),
+      },
+      'argmax_agreement': {
+          'turboquant': _summarize_metric(turbo_agreement),
+          'baseline': _summarize_metric(baseline_agreement),
+      },
+      'accuracy_delta': {
+          'turboquant': _summarize_metric(turbo_accuracy_delta),
+          'baseline': _summarize_metric(baseline_accuracy_delta),
+      },
+      'output_mse': {
+          'turboquant': _summarize_metric(turbo_mse),
+          'baseline': _summarize_metric(baseline_mse),
+      },
+      'latency_speedup_p50_float_over_quantized': {
+          'turboquant': _speedup_summary(results, 'turboquant'),
+          'baseline': _speedup_summary(results, 'baseline'),
+      },
+  }
+
+
+def validate_quality_gates(
+    report,
+    *,
+    max_turboquant_accuracy_drop=None,
+    max_baseline_accuracy_drop=None,
+    min_turboquant_argmax_agreement=None,
+    min_baseline_argmax_agreement=None,
+    max_turboquant_mse=None,
+):
+  """Returns a list of task-level quality gate failures for a benchmark report."""
+  failures = []
+  summary = report['summary']
+  turbo_accuracy_min = summary['accuracy_delta']['turboquant']['min']
+  baseline_accuracy_min = summary['accuracy_delta']['baseline']['min']
+  turbo_agreement_min = summary['argmax_agreement']['turboquant']['min']
+  baseline_agreement_min = summary['argmax_agreement']['baseline']['min']
+  turbo_mse_max = summary['output_mse']['turboquant']['max']
+
+  if (
+      max_turboquant_accuracy_drop is not None
+      and turbo_accuracy_min < -float(max_turboquant_accuracy_drop)
+  ):
+    failures.append(
+        'TurboQuant accuracy drop gate failed: '
+        f'min delta={turbo_accuracy_min:.4f} < '
+        f'-{float(max_turboquant_accuracy_drop):.4f}.'
+    )
+  if (
+      max_baseline_accuracy_drop is not None
+      and baseline_accuracy_min < -float(max_baseline_accuracy_drop)
+  ):
+    failures.append(
+        'Baseline accuracy drop gate failed: '
+        f'min delta={baseline_accuracy_min:.4f} < '
+        f'-{float(max_baseline_accuracy_drop):.4f}.'
+    )
+  if (
+      min_turboquant_argmax_agreement is not None
+      and turbo_agreement_min < float(min_turboquant_argmax_agreement)
+  ):
+    failures.append(
+        'TurboQuant argmax agreement gate failed: '
+        f'min agreement={turbo_agreement_min:.4f} < '
+        f'{float(min_turboquant_argmax_agreement):.4f}.'
+    )
+  if (
+      min_baseline_argmax_agreement is not None
+      and baseline_agreement_min < float(min_baseline_argmax_agreement)
+  ):
+    failures.append(
+        'Baseline argmax agreement gate failed: '
+        f'min agreement={baseline_agreement_min:.4f} < '
+        f'{float(min_baseline_argmax_agreement):.4f}.'
+    )
+  if max_turboquant_mse is not None and turbo_mse_max > float(max_turboquant_mse):
+    failures.append(
+        'TurboQuant output MSE gate failed: '
+        f'max mse={turbo_mse_max:.6f} > {float(max_turboquant_mse):.6f}.'
+    )
+  return failures
 
 
 def _single_run(
@@ -309,17 +447,6 @@ def run_real_model_benchmark(
           )
       )
 
-  turbo_ratios = [
-      float(item['compression']['turboquant']['effective_compression_ratio'])
-      for item in results
-  ]
-  baseline_ratios = [
-      float(item['compression']['baseline']['effective_compression_ratio'])
-      for item in results
-  ]
-  turbo_agreement = [item['drift']['argmax_agreement_turboquant'] for item in results]
-  baseline_agreement = [item['drift']['argmax_agreement_baseline'] for item in results]
-
   return {
       'metadata': {
           'models': list(models),
@@ -330,18 +457,11 @@ def run_real_model_benchmark(
           'sample_count': int(sample_count),
           'eval_count': int(eval_count),
           'batch_size': int(batch_size),
+          'warmup_steps': int(warmup_steps),
+          'benchmark_steps': int(benchmark_steps),
+          'num_classes': int(num_classes),
       },
-      'summary': {
-          'case_count': int(len(results)),
-          'turboquant_effective_compression_ratio_mean': float(
-              np.mean(turbo_ratios)
-          ),
-          'baseline_effective_compression_ratio_mean': float(
-              np.mean(baseline_ratios)
-          ),
-          'turboquant_argmax_agreement_mean': float(np.mean(turbo_agreement)),
-          'baseline_argmax_agreement_mean': float(np.mean(baseline_agreement)),
-      },
+      'summary': _build_summary(results),
       'results': results,
   }
 
@@ -355,13 +475,18 @@ def _print_report(report):
   )
   print(
       'Compression ratio mean: '
-      f"turboquant={report['summary']['turboquant_effective_compression_ratio_mean']:.2f}x, "
-      f"baseline={report['summary']['baseline_effective_compression_ratio_mean']:.2f}x"
+      f"turboquant={report['summary']['compression_ratio']['turboquant']['mean']:.2f}x, "
+      f"baseline={report['summary']['compression_ratio']['baseline']['mean']:.2f}x"
   )
   print(
       'Argmax agreement mean: '
-      f"turboquant={report['summary']['turboquant_argmax_agreement_mean']:.4f}, "
-      f"baseline={report['summary']['baseline_argmax_agreement_mean']:.4f}"
+      f"turboquant={report['summary']['argmax_agreement']['turboquant']['mean']:.4f}, "
+      f"baseline={report['summary']['argmax_agreement']['baseline']['mean']:.4f}"
+  )
+  print(
+      'Accuracy delta mean: '
+      f"turboquant={report['summary']['accuracy_delta']['turboquant']['mean']:.4f}, "
+      f"baseline={report['summary']['accuracy_delta']['baseline']['mean']:.4f}"
   )
 
 
@@ -396,6 +521,11 @@ def main():
   parser.add_argument('--warmup_steps', type=int, default=5)
   parser.add_argument('--benchmark_steps', type=int, default=20)
   parser.add_argument('--num_classes', type=int, default=10)
+  parser.add_argument('--max_turboquant_accuracy_drop', type=float, default=None)
+  parser.add_argument('--max_baseline_accuracy_drop', type=float, default=None)
+  parser.add_argument('--min_turboquant_argmax_agreement', type=float, default=None)
+  parser.add_argument('--min_baseline_argmax_agreement', type=float, default=None)
+  parser.add_argument('--max_turboquant_mse', type=float, default=None)
   parser.add_argument('--json_output', type=str, default='')
   args = parser.parse_args()
 
@@ -423,6 +553,18 @@ def main():
       num_classes=args.num_classes,
   )
   _print_report(report)
+  failures = validate_quality_gates(
+      report,
+      max_turboquant_accuracy_drop=args.max_turboquant_accuracy_drop,
+      max_baseline_accuracy_drop=args.max_baseline_accuracy_drop,
+      min_turboquant_argmax_agreement=args.min_turboquant_argmax_agreement,
+      min_baseline_argmax_agreement=args.min_baseline_argmax_agreement,
+      max_turboquant_mse=args.max_turboquant_mse,
+  )
+  if failures:
+    for failure in failures:
+      print(f'QUALITY_GATE_FAILURE: {failure}')
+    raise SystemExit(1)
   if args.json_output:
     with open(args.json_output, 'w', encoding='utf-8') as output_file:
       json.dump(report, output_file, indent=2, sort_keys=True)
