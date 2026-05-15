@@ -847,5 +847,18 @@ class RaggedBincountOpTest(test_util.TensorFlowTestCase,
               binary_output=False,
               name=None))
 
+  @test_util.run_in_graph_and_eager_modes
+  def test_output_size_overflow(self):
+    with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
+                                "RaggedBincount result would have shape"):
+      self.evaluate(
+          gen_math_ops.ragged_bincount(
+              splits=np.array([0, 3, 5, 9], dtype=np.int64),
+              values=np.ones((3, 3), dtype=np.int64),
+              size=np.iinfo(np.int64).max // 2 + 1,
+              weights=np.ones((3, 3), dtype=np.float32),
+              binary_output=False,
+              name=None))
+
 if __name__ == "__main__":
   googletest.main()
