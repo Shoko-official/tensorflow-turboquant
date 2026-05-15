@@ -30,6 +30,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/determinism.h"
+#include "tensorflow/core/util/overflow.h"
 
 namespace tensorflow {
 
@@ -512,6 +513,12 @@ class RaggedBincountOp : public OpKernel {
                 absl::InvalidArgumentError(absl::StrCat(
                     "Splits must end with the number of values, got ",
                     splits(num_rows), " instead of ", num_values)));
+
+    OP_REQUIRES(
+        ctx, MultiplyWithoutOverflow(num_rows, size) >= 0,
+        absl::InvalidArgumentError(absl::StrCat(
+            "RaggedBincount result would have shape [", num_rows, ", ", size,
+            "], which exceeds 2**63 - 1 elements")));
 
     Tensor* out_t;
     OP_REQUIRES_OK(
